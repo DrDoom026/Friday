@@ -1,8 +1,12 @@
 # FIRDAY
 
-Minimal FastAPI backend. This is PART 0 + PART 0.5: a runnable, containerized
-skeleton with a health check, structured logging, centralized error handling,
-and env-based config. Nothing else is in scope yet.
+Minimal FastAPI backend.
+
+- **PART 0 + 0.5** — a runnable, containerized skeleton with a health check,
+  structured logging, centralized error handling, and env-based config.
+- **PART 1** — FIRDAY Core: an orchestrator that runs a request through a
+  planner abstraction and returns a response. The only planner is a mock that
+  returns a canned plan; no LLM, no tools, nothing executes yet.
 
 ## Requirements
 
@@ -46,6 +50,26 @@ Check it:
 ```bash
 curl http://127.0.0.1:8000/health
 ```
+
+## Endpoints
+
+| Method | Path       | Description                                        |
+|--------|------------|----------------------------------------------------|
+| `GET`  | `/health`  | Liveness check.                                     |
+| `POST` | `/request` | Runs input through Core and returns the mock plan. |
+
+`POST /request` generates a correlation ID per request, threads it through the
+lifecycle logs, and returns it in the body and the `X-Request-ID` header. Send
+your own `X-Request-ID` header to reuse an existing trace ID.
+
+```bash
+curl -X POST http://127.0.0.1:8000/request \
+  -H 'Content-Type: application/json' \
+  -d '{"input": "summarise my inbox"}'
+```
+
+Each planned step comes back in `results` with status `not_executed` — real
+tool execution lands in a later part.
 
 ## Configuration
 
