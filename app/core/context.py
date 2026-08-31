@@ -42,3 +42,27 @@ class RequestContext:
 
     def logger(self, name: str = "firday") -> logging.LoggerAdapter:
         return _RequestLoggerAdapter(logging.getLogger(name), {"request_id": self.request_id})
+
+
+@dataclass(frozen=True)
+class ToolExecutionContext:
+    """Request-scoped context handed to a tool when it runs.
+
+    Wraps the Part 1 :class:`RequestContext` so a tool inherits the same
+    correlation ID, and adds an invocation ID identifying this one call.
+    """
+
+    request: RequestContext
+    tool_name: str
+    invocation_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+    @classmethod
+    def for_tool(cls, request: RequestContext, tool_name: str) -> "ToolExecutionContext":
+        return cls(request=request, tool_name=tool_name)
+
+    @property
+    def request_id(self) -> str:
+        return self.request.request_id
+
+    def logger(self, name: str = "firday.tool") -> logging.LoggerAdapter:
+        return self.request.logger(name)

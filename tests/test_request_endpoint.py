@@ -16,7 +16,7 @@ def test_request_returns_200_and_mock_plan():
     body = response.json()
     assert body["output"] == "[mock] Acknowledged: what is the weather"
     assert body["plan"]["planner_name"] == "mock"
-    assert body["plan"]["steps"][0]["tool_name"] == "noop"
+    assert body["plan"]["steps"][0]["tool_name"] == "echo"
     assert body["results"][0]["status"] == "not_executed"
 
 

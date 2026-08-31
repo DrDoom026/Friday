@@ -9,6 +9,8 @@ from app.core.context import RequestContext
 from app.core.models import FirdayRequest, FirdayResponse
 from app.core.orchestrator import Core
 from app.core.planner import MockPlanner
+from app.core.registry import build_default_registry
+from app.core.tools import ToolDescriptor
 from app.logging_config import configure_logging
 
 configure_logging(settings.log_level)
@@ -16,7 +18,7 @@ logger = logging.getLogger("firday")
 
 app = FastAPI(title="FIRDAY")
 
-core = Core(planner=MockPlanner())
+core = Core(planner=MockPlanner(), registry=build_default_registry())
 
 
 @app.exception_handler(HTTPException)
@@ -49,3 +51,8 @@ async def handle_request(
     result = await core.handle(payload, context)
     response.headers["X-Request-ID"] = context.request_id
     return result
+
+
+@app.get("/tools", response_model=list[ToolDescriptor])
+async def list_tools() -> list[ToolDescriptor]:
+    return core.registry.describe()

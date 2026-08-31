@@ -26,9 +26,9 @@ class MockPlanner:
             summary=f"[mock] Acknowledged: {request.input}",
             steps=[
                 PlanStep(
-                    tool_name="noop",
-                    arguments={"echo": request.input},
-                    rationale="Mock planner emits a single placeholder step.",
+                    tool_name="echo",
+                    arguments={"message": request.input},
+                    rationale="Mock planner always routes to the echo demo tool.",
                 )
             ],
         )

@@ -4,12 +4,13 @@ import asyncio
 import logging
 
 import pytest
+from pydantic import BaseModel
 
 from app.core.context import RequestContext
 from app.core.models import ExecutionStatus, FirdayRequest, Plan
 from app.core.orchestrator import Core
 from app.core.planner import MockPlanner, Planner
-from app.core.tools import Tool
+from app.core.tools import Tool, ToolPermissions
 
 
 def run(coro):
@@ -65,7 +66,8 @@ def test_mock_planner_returns_canned_plan():
     assert plan.planner_name == "mock"
     assert "ping" in plan.summary
     assert len(plan.steps) == 1
-    assert plan.steps[0].tool_name == "noop"
+    assert plan.steps[0].tool_name == "echo"
+    assert plan.steps[0].arguments == {"message": "ping"}
 
 
 def test_mock_planner_is_deterministic():
@@ -136,12 +138,25 @@ def test_core_logs_and_reraises_planner_failure(caplog):
 # --- tool abstraction (interface only in Part 1) ---------------------------
 
 
-def test_tool_protocol_is_satisfied_by_a_conforming_object():
+def test_tool_protocol_is_satisfied_without_inheriting_basetool():
     class ConformingTool:
         name = "noop"
         description = "does nothing"
+        version = "0.0.1"
+        permissions = ToolPermissions()
+        input_model = BaseModel
+        output_model = BaseModel
 
-        async def execute(self, arguments, context):  # pragma: no cover - not run in Part 1
+        def input_schema(self):
+            return {}
+
+        def output_schema(self):
+            return {}
+
+        def validate_input(self, arguments):
+            return BaseModel()
+
+        async def execute(self, arguments, context):  # pragma: no cover - not run here
             raise NotImplementedError
 
     assert isinstance(ConformingTool(), Tool)
