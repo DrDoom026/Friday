@@ -20,4 +20,14 @@ services:
       # unverified rather than falling back to any token check.
       - "/var/run/tailscale:/var/run/tailscale:ro"
       - "/usr/bin/tailscale:/usr/bin/tailscale:ro"
+      # PART 6: the docker.* tools read the engine's API over this socket. Like
+      # the Tailscale mounts it is optional - without it those four tools report
+      # Docker as unreachable and everything else is unaffected.
+      #
+      # Note what :ro does and does not do. It is the honest declaration of
+      # intent, but a unix socket is not made read-only by the mount: anything
+      # that can reach the Docker API can control the daemon. What actually
+      # keeps FIRDAY read-only here is DockerClient, which implements no write
+      # verb at all, and the fact that docker.start/stop/restart refuse.
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
     restart: unless-stopped

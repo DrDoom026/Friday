@@ -19,11 +19,16 @@ from app.devices.models import (
     NetworkIdentity,
     TransportKind,
 )
+from app.tools import filesystem, system
 
 logger = logging.getLogger("firday.devices.local")
 
-#: Registered tools that exist but always refuse. Kept in step with Part 4.
-_DISABLED_TOOL_NAMES = frozenset({"fs.delete", "fs.move", "fs.rename"})
+#: Registered tools that exist but always refuse. Taken from the tool packages
+#: themselves rather than restated here, so a device cannot claim a capability
+#: that is still a deny-stub.
+_DISABLED_TOOL_NAMES = frozenset(
+    filesystem.DISABLED_TOOL_NAMES + system.DISABLED_TOOL_NAMES
+)
 
 #: A stable id for "this machine", so restarts do not pile up duplicates.
 LOCAL_DEVICE_ID = "local"

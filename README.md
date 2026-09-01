@@ -21,6 +21,11 @@ Minimal FastAPI backend.
   tracking and selection, with trust anchored on Tailscale identity and a
   transport interface whose only real implementation is `local`.
 
+- **PART 6** — System: twenty-two registered tools across five domains
+  (`proc.*`, `service.*`, `docker.*`, `net.*`, `git.*`). Fourteen run for
+  real; the eight that change system state are registered and refuse until
+  Part 7.
+
   PART 3 (a generic shell tool) is intentionally skipped by design.
 
 ## Requirements
@@ -291,6 +296,130 @@ The compose file mounts the host's `tailscaled` socket and `tailscale` binary
 read-only so the container can perform identity lookups. Both are optional —
 without them devices simply stay `unverified`.
 
+## System tools (PART 6)
+
+Five families of high-level tools, all registered through the same Part 2
+framework. The split is the one Part 4 drew across the filesystem: **a tool
+that observes runs; a tool that changes something waits for Part 7.**
+
+| Domain | Runs for real | Registered, always refuses |
+|--------|---------------|----------------------------|
+| Processes | `proc.list`, `proc.inspect` | `proc.terminate` |
+| Services  | `service.status` | `service.start`, `service.stop`, `service.restart` |
+| Docker    | `docker.containers`, `docker.inspect`, `docker.logs`, `docker.images` | `docker.start`, `docker.stop`, `docker.restart` |
+| Network   | `net.interfaces`, `net.routes`, `net.ping`, `net.dns` | — |
+| Git       | `git.status`, `git.branches`, `git.clone` | `git.pull` |
+
+`git.clone` sits on the enabled side for the same reason `fs.copy` does: it
+only ever creates something new, and refuses any destination that already
+exists rather than writing into it.
+
+`git.pull` does not, and the reasoning is worth recording. It rewrites a
+working tree someone may be mid-edit in, it can fast-forward a branch out from
+under uncommitted work, and it applies whatever the remote currently says.
+"It is only one more write operation" is precisely the argument the skipped
+Part 3 exists to refuse, so it gets no exception.
+
+### How each family reaches the system
+
+| Family | Mechanism | Why |
+|--------|-----------|-----|
+| `proc.*` | `/proc`, read directly | `ps` is not in the slim image and its output format drifts between distributions; `/proc` is the kernel's own interface |
+| `service.*` | `systemctl show` | Emits stable `Key=Value` lines meant for machines, and exits zero for an unknown unit |
+| `docker.*` | The engine's HTTP API over its unix socket | No SDK and no CLI binary whose libc has to match the host's |
+| `net.interfaces`, `net.routes` | `ip -json` | The kernel's own view as JSON, so there is no column scraping |
+| `net.ping`, `net.dns` | The standard library | `getaddrinfo` is the resolver the rest of FIRDAY uses, and a TCP probe needs no binary |
+| `git.*` | `git`, via a fixed argv | Never a command string — see below |
+
+The image installs exactly four packages for this: `git`, `iproute2`,
+`iputils-ping` and `ca-certificates`. No Python dependency was added.
+
+### Nothing here is a shell
+
+Part 3 was skipped by design, and `app/system/command.py` is not a way back to
+it. Nothing accepts a command string. Every caller passes a fixed argument
+vector whose executable is a constant in FIRDAY's own source, `shell=False` is
+not overridable, and each caller-supplied argument goes through
+`reject_option_like` first so a value cannot arrive disguised as a flag.
+
+`git.clone` gets two more layers, because git's URL syntax is itself
+executable: the `ext::` transport hands git a command to run as its transport.
+So the URL is checked against an allow-list of schemes, and every git
+invocation carries `-c protocol.ext.allow=never` in case a URL form slipped
+past the check.
+
+### The sandbox is the Part 4 one
+
+The `git.*` tools resolve every path through the same
+`FilesystemPolicy` the `fs.*` tools use. There is no second sandbox, no second
+set of allowed roots, and `git.status /etc` is refused by the same rule that
+refuses `fs.read /etc`.
+
+### Audit trail
+
+Every system operation produces exactly one record on `firday.system.audit`,
+carrying the request's correlation ID — the same contract `firday.fs.audit`
+established in Part 4:
+
+```
+system audit domain=docker op=stop tool=docker.stop decision=denied \
+  outcome=not_authorized target=firday-api-1 invocation_id=b7a2… \
+  detail=state-changing system operations are gated on …
+```
+
+Successes log at INFO; denials, refusals and errors log at WARNING.
+
+### Refusing, honestly
+
+A disabled tool returns before the framework validates its input, so there is
+no code path from a caller to a signal, a unit, a container or a working tree:
+
+```json
+{
+  "authorized": false,
+  "domain": "process",
+  "operation": "terminate",
+  "reason": "state-changing system operations are gated on the Security/Permission Engine (PART 7), which does not exist yet",
+  "blocked_until": "PART 7 - Security/Permission Engine",
+  "targets": ["4211"]
+}
+```
+
+`blocked_until` is imported from the Part 4 destructive tools rather than
+restated, so the two families cannot drift apart. The tests do not take the
+refusal at its word: each one spawns a real process, points at a real running
+container, or builds a clone whose origin has moved ahead, and then checks the
+real system afterwards.
+
+### Docker access, and what `:ro` does not do
+
+The compose file mounts the host's Docker socket read-only. It is optional —
+without it those four tools report Docker as unreachable and nothing else
+changes.
+
+Be clear about the trust involved: a bind mount does not make a unix socket
+read-only, and anything that can reach the Docker API can control the daemon.
+What actually keeps FIRDAY read-only here is that `DockerClient` implements no
+write verb at all — no `post`, no `put`, no `delete` — and that
+`docker.start`/`stop`/`restart` refuse before reaching it.
+
+### Where systemd is not
+
+`service.status` needs a systemd manager. There is none inside FIRDAY's
+container, so there it reports:
+
+```
+required command 'systemctl' is not available on this host
+(service tools need systemd; this looks like a container)
+```
+
+That is the same graceful degradation Part 5 applies to Tailscale: say what is
+missing rather than guess. Making it work from inside the container would mean
+installing systemd in the image and mounting the host's D-Bus system socket —
+a much wider privilege surface than the Docker socket, for one read-only tool.
+That trade has not been made. Run FIRDAY on the host, or accept the limitation.
+
+
 ## Configuration
 
 Config is loaded from environment variables (see `.env.example`):
@@ -308,6 +437,12 @@ Config is loaded from environment variables (see `.env.example`):
 | `FS_MAX_LIST_ENTRIES` | `1000` | Cap on entries returned by `fs.list` |
 | `FS_MAX_SEARCH_RESULTS` | `500` | Cap on matches returned by `fs.search` |
 | `FS_MAX_SEARCH_DEPTH` | `12` | How deep `fs.search` will recurse |
+| `DOCKER_SOCKET` | `/var/run/docker.sock` | Where the `docker.*` tools look for the engine |
+| `SYSTEM_COMMAND_TIMEOUT_SECONDS` | `10` | Deadline for a system tool's external command |
+| `SYSTEM_GIT_TIMEOUT_SECONDS` | `120` | Deadline for `git.clone`, which is network-bound |
+| `SYSTEM_MAX_PROCESSES` | `500` | Cap on processes returned by `proc.list` |
+| `SYSTEM_MAX_LOG_LINES` | `500` | Cap on lines returned by `docker.logs` |
+| `SYSTEM_MAX_PING_COUNT` | `10` | Cap on echo requests `net.ping` will send |
 
 Never commit a real `.env` file — it's git-ignored. Copy `.env.example` to
 `.env` and edit locally.
