@@ -17,6 +17,10 @@ Minimal FastAPI backend.
   size limits) with an audit record for every attempt. `fs.delete`, `fs.move`
   and `fs.rename` are registered but disabled until Part 7.
 
+- **PART 5** — Devices: a device model, registry, capability claims, status
+  tracking and selection, with trust anchored on Tailscale identity and a
+  transport interface whose only real implementation is `local`.
+
   PART 3 (a generic shell tool) is intentionally skipped by design.
 
 ## Requirements
@@ -82,6 +86,10 @@ put the host side somewhere other than `~/firday/workspace`.
 |--------|------------|---------------------------------------------------------|
 | `GET`  | `/health`  | Liveness check.                                          |
 | `GET`  | `/tools`   | Lists registered tools with schemas and permissions.     |
+| `POST` | `/devices` | Registers a device; trust is derived, not supplied.      |
+| `GET`  | `/devices` | Lists devices, filterable by capability/trust/status.    |
+| `GET`  | `/devices/{id}` | One device, or 404.                                |
+| `POST` | `/devices/{id}/heartbeat` | Refreshes `last_seen` and status.        |
 | `POST` | `/request` | Runs input through Core and returns the mock plan.      |
 
 `POST /request` generates a correlation ID per request, threads it through the
@@ -198,6 +206,62 @@ protected system path '/root'
   fix: point FS_ALLOWED_ROOTS somewhere writable. In a container ~ expands to
   /root, which is a protected system path. ...
 ```
+
+## Devices (PART 5)
+
+Every machine FIRDAY can act on is a device. The Pi it runs on registers itself
+at startup, so `/devices` is answerable from boot.
+
+| Field | Notes |
+|-------|-------|
+| `device_id` | Stable; the local machine is always `local` |
+| `name`, `platform`, `architecture` | `platform` normalizes `Linux`/`macOS`/`win32`/… |
+| `network` | hostname, FQDN, addresses |
+| `tailscale` | Node id, MagicDNS name, addresses, tailnet user — when resolved |
+| `capabilities` | What the device *claims* it can do |
+| `status` | `online` / `offline` / `unknown` |
+| `trust` | `trusted` / `unverified` / `untrusted` / `revoked` |
+| `permissions` | Declared only; PART 7 enforces |
+| `last_seen` | Refreshed by `/heartbeat` |
+
+### Trust comes from Tailscale
+
+There is no FIRDAY token system, by design. A device is expected to already be
+on the tailnet, so "who is this?" is answered by asking Tailscale — two ways,
+because it depends how FIRDAY is exposed:
+
+- **Identity headers.** Behind `tailscale serve`/`funnel`, the proxy injects
+  `Tailscale-User-Login` / `Tailscale-User-Name`, which a client cannot forge
+  through it.
+- **`tailscale whois`.** Reached directly on a tailnet address, the peer's
+  source IP resolves to a node and user via the local `tailscaled`.
+
+Both are read-only lookups against the local daemon, so no Tailscale client
+library is needed — the CLI is shelled out to. `TailscaleIdentitySource` is the
+seam if the LocalAPI socket is preferred later.
+
+The rules: `revoked` is sticky and never silently lifted; an identified node on
+the expected tailnet user is `trusted`; a different tailnet user is
+`untrusted`; anything unresolvable is `unverified`. **When Tailscale is
+unavailable the policy degrades to never granting trust** — it does not fall
+back to a substitute check.
+
+A device cannot assert its own trust: `trust` and `tailscale` are not fields on
+the registration model, and `DeviceRegistry.update()` refuses to set trust.
+
+### Transports
+
+`local` is the only implemented transport — the Pi itself. `ssh`, `tailscale`
+and `agent` are declared so a device can name one, but every call raises
+`TransportNotImplementedError`. The interface stops at "can I reach this
+device?"; there is deliberately no method that runs a command, because remote
+execution is gated on PART 7.
+
+### Docker
+
+The compose file mounts the host's `tailscaled` socket and `tailscale` binary
+read-only so the container can perform identity lookups. Both are optional —
+without them devices simply stay `unverified`.
 
 ## Configuration
 

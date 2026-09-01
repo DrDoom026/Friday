@@ -14,4 +14,10 @@ services:
       # Persist the sandbox on the host, not in the container's writable layer.
       # FS_HOST_ROOT overrides the host side; it defaults to ~/firday/workspace.
       - "${FS_HOST_ROOT:-${HOME}/firday/workspace}:/data/workspace"
+      # PART 5: device trust is anchored on Tailscale identity, so the container
+      # needs to reach the host's tailscaled. Both mounts are read-only, and
+      # both are optional - without them FIRDAY degrades to leaving devices
+      # unverified rather than falling back to any token check.
+      - "/var/run/tailscale:/var/run/tailscale:ro"
+      - "/usr/bin/tailscale:/usr/bin/tailscale:ro"
     restart: unless-stopped
