@@ -79,9 +79,11 @@ def test_tools_endpoint_lists_the_registered_tool():
     assert response.status_code == 200
 
     body = response.json()
-    assert [t["name"] for t in body] == ["echo"]
+    names = [t["name"] for t in body]
+    assert "echo" in names
+    assert [n for n in names if not n.startswith("fs.")] == ["echo"]
 
-    echo = body[0]
+    echo = next(t for t in body if t["name"] == "echo")
     assert echo["version"] == "1.0.0"
     assert echo["description"]
     assert echo["permissions"]["side_effect"] == "none"

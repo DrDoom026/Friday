@@ -129,8 +129,10 @@ def test_build_default_registry_discovers_the_echo_tool():
     assert registry.get("echo").name == "echo"
 
 
-def test_part_2_ships_exactly_one_tool():
-    assert build_default_registry().names() == ["echo"]
+def test_echo_remains_the_only_non_filesystem_tool():
+    """Part 2 shipped `echo`; Part 4 added the `fs.*` family and nothing else."""
+    names = build_default_registry().names()
+    assert [n for n in names if not n.startswith("fs.")] == ["echo"]
 
 
 # --- the echo tool ---------------------------------------------------------
