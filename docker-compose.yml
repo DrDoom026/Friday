@@ -5,4 +5,13 @@ services:
       - "${PORT:-8000}:8000"
     env_file:
       - .env
+    environment:
+      # Overrides whatever .env says. Inside the container ~ expands to /root,
+      # which the sandbox refuses as a protected system path - so the container
+      # side of the mount below must be absolute and outside /root.
+      FS_ALLOWED_ROOTS: /data/workspace
+    volumes:
+      # Persist the sandbox on the host, not in the container's writable layer.
+      # FS_HOST_ROOT overrides the host side; it defaults to ~/firday/workspace.
+      - "${FS_HOST_ROOT:-${HOME}/firday/workspace}:/data/workspace"
     restart: unless-stopped

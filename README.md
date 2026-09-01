@@ -62,6 +62,20 @@ Check it:
 curl http://127.0.0.1:8000/health
 ```
 
+The compose file bind-mounts the sandbox so its contents outlive the container:
+
+```yaml
+environment:
+  FS_ALLOWED_ROOTS: /data/workspace
+volumes:
+  - "${FS_HOST_ROOT:-${HOME}/firday/workspace}:/data/workspace"
+```
+
+`FS_ALLOWED_ROOTS` is overridden here on purpose. In the container `~` expands
+to `/root`, which the sandbox refuses as a protected system path, so the
+container-side root must be an absolute path outside it. Set `FS_HOST_ROOT` to
+put the host side somewhere other than `~/firday/workspace`.
+
 ## Endpoints
 
 | Method | Path       | Description                                             |
@@ -163,6 +177,28 @@ the decision, the outcome and the request's correlation ID from Part 1:
  "request_id": "live-fs-demo"}
 ```
 
+### Startup check
+
+The sandbox is validated at boot, not on first use. `app/fs/bootstrap.py` runs
+from the application lifespan and either makes the sandbox usable or stops the
+process:
+
+- a configured root that does not exist is created (`mkdir -p`);
+- a root that is missing, relative, not a directory, not writable, or inside a
+  protected system path aborts startup with a message naming the problem, the
+  current `FS_ALLOWED_ROOTS`, and the fix.
+
+So a misconfigured sandbox fails at `docker compose up`, not on the first
+`fs.*` call hours later:
+
+```
+filesystem sandbox is unusable: allowed root '/root/firday/workspace' is inside
+protected system path '/root'
+  FS_ALLOWED_ROOTS = ~/firday/workspace
+  fix: point FS_ALLOWED_ROOTS somewhere writable. In a container ~ expands to
+  /root, which is a protected system path. ...
+```
+
 ## Configuration
 
 Config is loaded from environment variables (see `.env.example`):
@@ -173,6 +209,7 @@ Config is loaded from environment variables (see `.env.example`):
 | `LOG_LEVEL`| `INFO`        | Log level for structured logging   |
 | `PORT`     | `8000`        | Host port mapped in Docker Compose |
 | `FS_ALLOWED_ROOTS` | `~/firday/workspace` | Colon-separated absolute roots the `fs.*` tools may touch |
+| `FS_HOST_ROOT` | `~/firday/workspace` | Docker only: host side of the sandbox bind mount |
 | `FS_MAX_READ_BYTES` | `5242880` | Largest file `fs.read` will load |
 | `FS_MAX_WRITE_BYTES` | `5242880` | Largest payload `fs.write` will write |
 | `FS_MAX_COPY_BYTES` | `52428800` | Largest file or tree `fs.copy` will duplicate |

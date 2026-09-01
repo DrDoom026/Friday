@@ -165,7 +165,10 @@ class FilesystemTool(BaseTool):
         outcome: str,
         detail: str | None = None,
     ) -> None:
-        resolved = [p for p in (self.policy.try_resolve(raw) for raw in raw_paths) if p]
+        try:
+            resolved = [p for p in (self.policy.try_resolve(raw) for raw in raw_paths) if p]
+        except Exception:  # noqa: BLE001 - an unusable policy must not mask the real error
+            resolved = []
         record_attempt(
             context,
             operation=self.operation,

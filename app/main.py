@@ -1,4 +1,6 @@
 import logging
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
 
 from fastapi import FastAPI, Header, Request, Response
 from fastapi.exceptions import HTTPException
@@ -11,12 +13,31 @@ from app.core.orchestrator import Core
 from app.core.planner import MockPlanner
 from app.core.registry import build_default_registry
 from app.core.tools import ToolDescriptor
+from app.fs.bootstrap import SandboxConfigurationError, ensure_sandbox_ready
 from app.logging_config import configure_logging
 
 configure_logging(settings.log_level)
 logger = logging.getLogger("firday")
 
-app = FastAPI(title="FIRDAY")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Validate the filesystem sandbox before serving a single request.
+
+    The sandbox is otherwise built lazily, so a missing or misconfigured root
+    would only surface as an opaque failure on the first ``fs.*`` call. Boot
+    here instead: create a missing root, or refuse to start with a readable
+    explanation of what is wrong and how to fix it.
+    """
+    try:
+        ensure_sandbox_ready(settings.fs_allowed_roots)
+    except SandboxConfigurationError as exc:
+        logger.critical("startup aborted - %s", exc)
+        raise
+    yield
+
+
+app = FastAPI(title="FIRDAY", lifespan=lifespan)
 
 core = Core(planner=MockPlanner(), registry=build_default_registry())
 
