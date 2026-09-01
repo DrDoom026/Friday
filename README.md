@@ -25,13 +25,15 @@ Minimal FastAPI backend.
 
 ## Requirements
 
-- Python 3.12+ (or Docker)
+- **Python 3.12.x** — the same minor version the Docker image deploys on, not
+  merely "3.12 or newer". See [Python version](#python-version) for why.
 - Docker + Docker Compose (for containerized run)
 
 ## Run locally
 
 ```bash
-python3 -m venv .venv
+mise install                 # installs the pinned Python (see mise.toml)
+mise exec -- python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
 
@@ -39,6 +41,9 @@ cp .env.example .env
 
 uvicorn app.main:app --reload
 ```
+
+Without `mise`, use any 3.12 interpreter — `python3.12 -m venv .venv`. The
+suite refuses to pass on a mismatched version, so you will know immediately.
 
 Check it:
 
@@ -52,6 +57,29 @@ curl http://127.0.0.1:8000/health
 source .venv/bin/activate
 pytest -v
 ```
+
+### Python version
+
+The local interpreter must match the Dockerfile's base image exactly, and
+`tests/test_python_version.py` fails the suite if it does not.
+
+This is not pedantry. Part 5 shipped a bug that every local test passed over: a
+method named `list` shadowed the builtin inside a class body, which breaks the
+`-> list[...]` annotations below it. Python 3.12 evaluates those annotations
+eagerly and raised `TypeError` at import; 3.14 defers them (PEP 649) and did
+not. The suite was green on a 3.14 venv while the 3.12 container crash-looped
+on startup — a whole class of error that a version gap makes invisible.
+
+The pin lives in three places, with the Dockerfile as the source of truth:
+
+| Where | What it does |
+|-------|--------------|
+| `Dockerfile` | `FROM python:3.12-slim` — what actually runs in production |
+| `mise.toml` | Installs that interpreter locally |
+| `pyproject.toml` | `requires-python = ">=3.12,<3.13"` — declares the constraint |
+
+To move versions, change the Dockerfile, then rebuild the venv. The guard fails
+until the two agree, in either direction.
 
 ## Run via Docker Compose
 

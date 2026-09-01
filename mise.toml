@@ -1,0 +1,4 @@
+# Pins the local interpreter to the version the Dockerfile deploys on.
+# `mise install` then `python -m venv .venv` gives a venv that matches production.
+[tools]
+python = "3.12"
