@@ -67,6 +67,18 @@ class Settings:
     system_max_log_lines: int = 500
     system_max_ping_count: int = 10
 
+    @property
+    def fs_all_roots(self) -> tuple[str, ...]:
+        """The effective allowed roots: the workspace root(s) plus the vault.
+
+        Single source of truth for "everywhere the filesystem sandbox may
+        operate" - both startup (:func:`app.fs.bootstrap.ensure_sandbox_ready`)
+        and the lazy default-policy fallback (:func:`app.fs.policy.get_default_policy`)
+        must build from this, or the two can silently disagree about whether
+        the vault is in bounds.
+        """
+        return self.fs_allowed_roots + (self.fs_vault_root,)
+
 
 def get_settings() -> Settings:
     return Settings(

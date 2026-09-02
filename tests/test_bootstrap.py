@@ -156,6 +156,50 @@ def test_install_can_be_skipped(tmp_path):
     assert get_default_policy() is before
 
 
+# --- PART 8: the vault root must be an effective allowed root --------------
+
+
+def test_settings_fs_all_roots_includes_the_vault_root():
+    """``fs_all_roots`` is the single source of truth combining the two."""
+    from app.config import Settings
+
+    s = Settings(
+        app_env="test",
+        log_level="INFO",
+        port=8000,
+        fs_allowed_roots=("/data/workspace",),
+        fs_vault_root="/data/vault",
+    )
+
+    assert s.fs_all_roots == ("/data/workspace", "/data/vault")
+
+
+def test_default_policy_fallback_includes_the_vault_root(tmp_path, monkeypatch):
+    """Regression: the Pi reported /data/vault missing from the effective
+    allowed roots. Root cause - get_default_policy()'s lazy fallback built its
+    policy from settings.fs_allowed_roots alone, so any caller reaching it
+    before (or without) app.main's lifespan running got a policy that excluded
+    the vault, even though FS_VAULT_ROOT was set.
+    """
+    import app.config as config
+
+    workspace = tmp_path / "workspace"
+    vault = tmp_path / "vault"
+    monkeypatch.setattr(
+        config,
+        "settings",
+        dataclasses.replace(
+            config.settings, fs_allowed_roots=(str(workspace),), fs_vault_root=str(vault)
+        ),
+    )
+    set_default_policy(None)
+
+    policy = get_default_policy()
+
+    assert vault.resolve() in policy.roots
+    assert workspace.resolve() in policy.roots
+
+
 # --- the app refuses to start ----------------------------------------------
 
 

@@ -219,7 +219,7 @@ def get_default_policy() -> FilesystemPolicy:
         from app.config import settings
 
         _default_policy = FilesystemPolicy(
-            allowed_roots=list(settings.fs_allowed_roots),
+            allowed_roots=list(settings.fs_all_roots),
             limits=FilesystemLimits(
                 max_read_bytes=settings.fs_max_read_bytes,
                 max_write_bytes=settings.fs_max_write_bytes,
