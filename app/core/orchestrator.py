@@ -3,7 +3,7 @@
 Request -> Core -> planner -> tool resolution -> (future) execution -> response.
 """
 
-from app.core.context import RequestContext
+from app.core.context import RequestContext, ToolExecutionContext
 from app.core.errors import ToolValidationError
 from app.core.models import ExecutionStatus, FirdayRequest, FirdayResponse, Plan, ToolResult
 from app.core.planner import Planner
@@ -27,6 +27,10 @@ class Core:
         self._memory = MemoryService() if memory is None else memory
 
     @property
+    def planner(self) -> Planner:
+        return self._planner
+
+    @property
     def registry(self) -> ToolRegistry:
         return self._registry
 
@@ -34,7 +38,20 @@ class Core:
     def memory(self) -> MemoryService:
         return self._memory
 
-    async def handle(self, request: FirdayRequest, context: RequestContext) -> FirdayResponse:
+    async def handle(
+        self, request: FirdayRequest, context: RequestContext, *, execute: bool = False
+    ) -> FirdayResponse:
+        """Run one request through the planner and, optionally, real tool execution.
+
+        ``execute=False`` (the default) preserves the Part 1/2 contract: steps
+        are resolved against the registry but never run (``NOT_EXECUTED``).
+        ``execute=True`` is PART 9's real flow - each step actually runs
+        through :meth:`Tool.execute`, which is where the Security Engine
+        authorizes (or blocks) it. A planner that also defines ``finalize``
+        (e.g. :class:`app.llm.planner.LLMPlanner`) gets a chance to turn the
+        results into the final response text; any other planner keeps using
+        its plan summary as the response output.
+        """
         log = context.logger("firday.core")
         log.info("request entering core (source=%s)", context.source)
 
@@ -47,22 +64,36 @@ class Core:
             raise
         log.info("planner returned plan (steps=%d)", len(plan.steps))
 
-        results = self._resolve_steps(plan, context)
+        results = await self._resolve_steps(plan, context, execute=execute)
+
+        output = plan.summary
+        finalize = getattr(self._planner, "finalize", None)
+        if execute and results and callable(finalize):
+            try:
+                output = await finalize(results, context)
+            except Exception:
+                log.exception("planner finalize failed; falling back to plan summary")
 
         response = FirdayResponse(
             request_id=context.request_id,
-            output=plan.summary,
+            output=output,
             plan=plan,
             results=results,
         )
         log.info("response returned (elapsed_ms=%.2f)", context.elapsed_ms())
         return response
 
-    def _resolve_steps(self, plan: Plan, context: RequestContext) -> list[ToolResult]:
-        """Resolve each planned step against the registry without running it.
+    async def _resolve_steps(
+        self, plan: Plan, context: RequestContext, *, execute: bool
+    ) -> list[ToolResult]:
+        """Resolve each planned step against the registry.
 
-        Part 2 goes as far as "the tool exists and these arguments fit its
-        schema", then stops at NOT_EXECUTED. Running the tool is a later part.
+        Without ``execute``, this goes as far as "the tool exists and these
+        arguments fit its schema", then stops at ``NOT_EXECUTED`` (Part 2).
+        With ``execute``, each step actually runs through
+        :meth:`Tool.execute`, which authorizes it via the Security Engine
+        before doing anything (Part 7/9) - DENY and REQUIRE_CONFIRMATION are
+        never executed.
         """
         log = context.logger("firday.core")
         results: list[ToolResult] = []
@@ -76,6 +107,14 @@ class Core:
                         tool_name=step.tool_name,
                         status=ExecutionStatus.ERROR,
                         error=f"no tool registered under name {step.tool_name!r}",
+                    )
+                )
+                continue
+
+            if execute:
+                results.append(
+                    await tool.execute(
+                        step.arguments, ToolExecutionContext.for_tool(context, tool.name)
                     )
                 )
                 continue

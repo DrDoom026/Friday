@@ -18,6 +18,17 @@ DEFAULT_FS_VAULT_ROOT = "~/firday/vault"
 #: PART 6 ``docker.*`` tools need; without it they report Docker as unreachable.
 DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
 
+#: PART 9 local inference backend (Ollama). Role: intent classification and a
+#: best-effort assist only - never FIRDAY's main reasoning model.
+DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434"
+DEFAULT_OLLAMA_MODEL = "qwen2.5:0.5b"
+
+#: PART 9 cloud routing (OmniRoute). A dumb OpenAI-compatible pipe in front of
+#: Groq -> Gemini (AI Studio) -> Cerebras; provider priority is OmniRoute's own
+#: configuration, not FIRDAY's. FIRDAY only ever calls /v1/chat/completions.
+DEFAULT_OMNIROUTE_BASE_URL = "http://localhost:3333"
+DEFAULT_OMNIROUTE_MODEL = "auto"
+
 
 def _int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -66,6 +77,16 @@ class Settings:
     system_max_processes: int = 500
     system_max_log_lines: int = 500
     system_max_ping_count: int = 10
+    # PART 9: hybrid LLM layer.
+    ollama_base_url: str = DEFAULT_OLLAMA_BASE_URL
+    ollama_model: str = DEFAULT_OLLAMA_MODEL
+    omniroute_base_url: str = DEFAULT_OMNIROUTE_BASE_URL
+    omniroute_model: str = DEFAULT_OMNIROUTE_MODEL
+    omniroute_api_key: str | None = None
+    llm_request_timeout_seconds: float = 20.0
+    llm_max_retries: int = 2
+    llm_max_context_chars: int = 4000
+    llm_memory_top_k: int = 3
 
     @property
     def fs_all_roots(self) -> tuple[str, ...]:
@@ -99,6 +120,15 @@ def get_settings() -> Settings:
         system_max_processes=_int_env("SYSTEM_MAX_PROCESSES", 500),
         system_max_log_lines=_int_env("SYSTEM_MAX_LOG_LINES", 500),
         system_max_ping_count=_int_env("SYSTEM_MAX_PING_COUNT", 10),
+        ollama_base_url=os.getenv("OLLAMA_BASE_URL") or DEFAULT_OLLAMA_BASE_URL,
+        ollama_model=os.getenv("OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL,
+        omniroute_base_url=os.getenv("OMNIROUTE_BASE_URL") or DEFAULT_OMNIROUTE_BASE_URL,
+        omniroute_model=os.getenv("OMNIROUTE_MODEL") or DEFAULT_OMNIROUTE_MODEL,
+        omniroute_api_key=os.getenv("OMNIROUTE_API_KEY") or None,
+        llm_request_timeout_seconds=_float_env("LLM_REQUEST_TIMEOUT_SECONDS", 20.0),
+        llm_max_retries=_int_env("LLM_MAX_RETRIES", 2),
+        llm_max_context_chars=_int_env("LLM_MAX_CONTEXT_CHARS", 4000),
+        llm_memory_top_k=_int_env("LLM_MEMORY_TOP_K", 3),
     )
 
 

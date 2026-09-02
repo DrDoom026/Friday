@@ -482,7 +482,9 @@ Current limitation:
 
 ## 7. Current State / Next Work
 
-### 🔲 Part 8 — Memory and Context
+### ✅ Part 8 — Memory and Context
+
+**Status note (corrected during Part 9 work):** implemented in the repository (`app/memory/`, `tests/test_memory.py`) though this section below was left in its original pre-implementation planning form. See `app/memory/service.py` for the actual `MemoryService` API Part 9's `LLMPlanner` calls.
 
 **Design decisions already made:**
 
@@ -558,119 +560,133 @@ Still required:
 
 ---
 
-### 🔲 Part 9 — Hybrid LLM Layer ($0 target)
+### ✅ Part 9 — Hybrid LLM Layer ($0 target)
 
-**Goal:** use free/local inference without creating an alternative tool-execution path.
+**Status:** implemented and unit-tested locally. **Not yet verified as a running service on the Pi** - see "Pi deployment status" below before treating it as deployed.
 
-#### Local model
+**Tests at handoff:** 456 passing (427 pre-Part-9 + 29 new).
 
-Planned stack:
+Implemented (`app/llm/`):
 
-- Ollama on the Pi
-- Qwen2.5 0.5B–1.5B or TinyLlama 1.1B
-- Q4 quantized
-- Role: intent classification + privacy/sensitivity classification only
-- Keep local prompts short
+- `app/llm/privacy.py` - deterministic, regex-based sensitivity gate. `is_sensitive()` detects home/private paths (`/home/...`, `~/...`, `.ssh`, `.env`, `id_rsa`), credential/token key=value pairs, AWS/OpenAI/GitHub-style secret shapes, JWTs, and PEM private-key blocks. `redact()` is the output privacy filter - it replaces every matched span with `[REDACTED]`. No cloud LLM call is ever used to make this decision.
+- `app/llm/providers.py`:
+  - `OllamaClient` - local inference. Only method is `classify_intent()`: a short prompt, single-word category reply. Fails safe (`"unknown"`) if Ollama is unreachable - never blocks planning.
+  - `OmniRouteClient` - cloud routing. Only method is `complete()`, calling `POST {base}/v1/chat/completions` (OpenAI-compatible). Capped retries with exponential backoff on network/5xx errors; a `429` fails immediately without retrying (no uncontrolled retry loop against an exhausted rate limit). Raises `LLMProviderError` on final failure - the error message never contains the API key. No MCP, A2A, Cloud Agent, or router-managed tool execution is used or referenced anywhere in this client; it only ever calls the one endpoint.
+- `app/llm/planner.py` - `LLMPlanner`, a real implementation of the Part 1 `Planner` protocol:
+  - `plan(request, context)`: privacy gate on the raw input first (blocks cloud routing entirely if sensitive, no cloud call made) → best-effort local intent classification (Ollama) → memory retrieval via the existing `MemoryService.search()` (Part 8), capped to `LLM_MEMORY_TOP_K` most-recently-updated notes, never the whole vault, redacted before being placed in the prompt, memory failure caught and logged rather than propagated → cloud `complete()` call → strict JSON parse of the reply (`{"tool_name": str|null, "arguments": {}, "summary": str}`); anything else (invalid JSON, wrong types, provider failure) becomes a structured `Plan` with **no steps** - it never guesses a tool or arguments.
+  - `finalize(results, context)`: the output-privacy-filter step. Every `ToolResult` is redacted (`app.llm.privacy.redact`) before it is serialized into the follow-up cloud prompt that produces the final natural-language response. On provider failure, falls back to a plain (still-redacted) status summary instead of raising.
+  - The planner never touches the tool registry, Security Engine, or `Tool.execute` - it only returns a `Plan`.
+- `app/core/orchestrator.py` - `Core.handle()` gained an `execute: bool = False` keyword (default preserves the exact Part 1/2 `NOT_EXECUTED` contract; existing tests are unchanged). When `execute=True`, each planned step is run through `Tool.execute()`, which is where the **Part 7 Security Engine already lives** (`BaseTool.execute()` calls `get_security_engine().authorize()` before anything runs) - Part 9 did not add a second authorization path, it just started actually calling the one that existed. `DENY` and `REQUIRE_CONFIRMATION` both surface as an `ExecutionStatus.ERROR` result with no side effect, exactly as Part 7 defined. After execution, if the planner defines a `finalize()` method (only `LLMPlanner` does), Core calls it to produce the response text; any planner without `finalize` keeps using the plan summary.
+- `app/main.py` - `FIRDAY_PLANNER=llm` (env var, default `mock`) switches the process-wide `Core` to `LLMPlanner`, wired to `OmniRouteClient`, `OllamaClient`, and the existing `MemoryService`. The `/request` endpoint passes `execute=True` only when the active planner defines `finalize` (i.e. only for `LLMPlanner`), so the mock-planner default path is completely unaffected.
 
-#### Cloud routing
+#### Environment variables (`app/config.py`)
 
-Planned router:
+| Variable | Default | Meaning |
+|---|---|---|
+| `FIRDAY_PLANNER` | `mock` | `mock` (Part 1, unchanged) or `llm` (Part 9 real planner). |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Local Ollama server. |
+| `OLLAMA_MODEL` | `qwen2.5:0.5b` | Any Q4-quantized small model pulled into Ollama; `tinyllama:1.1b` also supported. |
+| `OMNIROUTE_BASE_URL` | `http://localhost:3333` | OmniRoute's own HTTP address. |
+| `OMNIROUTE_MODEL` | `auto` | Model alias passed to OmniRoute; provider selection (Groq → Gemini → Cerebras) is OmniRoute's own internal routing config, not FIRDAY's. |
+| `OMNIROUTE_API_KEY` | unset | OmniRoute's own API key, if it requires one. **Never logged** - `OmniRouteClient` only logs status codes/exception types. |
+| `LLM_REQUEST_TIMEOUT_SECONDS` | `20.0` | Per-attempt HTTP timeout for both clients. |
+| `LLM_MAX_RETRIES` | `2` | Capped retry count for `OmniRouteClient.complete()`; `429` never retries regardless of this value. |
+| `LLM_MAX_CONTEXT_CHARS` | `4000` | Soft cap on prompt/system-message size (character count, not a tokenizer). |
+| `LLM_MEMORY_TOP_K` | `3` | Max memory notes pulled into a planning prompt. |
 
-```text
-OmniRoute
-  ↓
-Groq → Gemini (AI Studio) → Cerebras
+None of these are committed; set them in the Pi's `~/Friday/.env` alongside the existing Part 4/6/8 variables.
+
+#### Sensitivity / privacy gate - as implemented
+
+Deterministic and regex-based, exactly as specified - no paid/cloud LLM call decides sensitivity. Runs in two places:
+
+1. **Before any cloud call**: `LLMPlanner.plan()` checks `is_sensitive(request.input)`. If true, cloud routing is blocked outright - the `Plan` returned has no steps and a summary explaining why, and no request ever reaches OmniRoute.
+2. **After tool execution, before the next cloud call**: `LLMPlanner.finalize()` runs every `ToolResult` through `redact()` before it is included in the follow-up prompt that produces the final response.
+
+#### Memory integration - as implemented
+
+`LLMPlanner` takes the existing Part 8 `MemoryService` by constructor injection and calls `.search()` (no vector DB, same substring/tag search Part 8 already has). Results are sorted by `updated_at` and capped to `LLM_MEMORY_TOP_K` before being redacted and placed in the prompt - the full vault is never dumped. If `MemoryService.search()` raises for any reason, the planner logs a warning and continues with no memory context; it never turns a memory failure into unrestricted tool access, and planning is not blocked.
+
+#### Provider fallback / rate-limit / failure behavior - as implemented
+
+- FIRDAY calls exactly one cloud endpoint (OmniRoute's `/v1/chat/completions`); Groq → Gemini → Cerebras fallback happens **inside OmniRoute's own configuration**, not in FIRDAY code - FIRDAY has no knowledge of which underlying provider actually answered.
+- `OmniRouteClient.complete()` retries up to `LLM_MAX_RETRIES` times with exponential backoff (1s, 2s, 4s, capped at 8s) on network errors or 5xx responses.
+- A `429` (rate limit) is treated as immediately fatal - no retry - to avoid hammering an exhausted free tier.
+- On total provider failure, `LLMPlanner.plan()` returns a no-op `Plan` (empty steps, explanatory summary) rather than raising; `LLMPlanner.finalize()` falls back to a plain redacted status line. Core is never bypassed and no tool executes as a result of a provider failure.
+- A malformed/non-JSON LLM reply is treated the same way as a provider failure: empty-step `Plan`, nothing guessed.
+
+#### OmniRoute hard restrictions (respected)
+
+`OmniRouteClient` only ever calls `/v1/chat/completions`. Nothing in this codebase registers, starts, or talks to OmniRoute's bundled MCP server, A2A, or Cloud Agent features, and no router-managed tool execution path exists. The LLM never calls `Tool.execute` directly - only `Core._resolve_steps` does, and only after `SecurityEngine.authorize()` allows it.
+
+#### How Part 9 is tested (`tests/test_llm.py`, 29 tests)
+
+Privacy gate (sensitive text detected/allowed, redaction), `OllamaClient` (configurable, classifies, fails safe when unreachable), `OmniRouteClient` (success, retry-then-succeed, retries-exhausted failure, 429 fails without retry, API key never appears in logs), `LLMPlanner.plan()` (sensitive input blocks cloud call, well-formed JSON produces a structured `PlanStep`, malformed JSON produces zero steps, provider failure handled gracefully, memory failure fails safe, relevant memory reaches the prompt), `LLMPlanner.finalize()` (tool output redacted before the cloud call, graceful fallback on provider failure), and a `Core` integration group proving an LLM-originated tool step still goes through the real `SecurityEngine` when executed - `REQUIRE_CONFIRMATION` and `DENY` both block execution, and the Part 1 default (`execute` omitted) still returns `NOT_EXECUTED` unchanged.
+
+#### Deferred / intentionally out of scope for Part 9
+
+- Actually pulling a model into Ollama and deploying/running OmniRoute as a process on the Pi (see "Pi deployment status" and "Manual deployment steps" below) - Part 9 delivers the FIRDAY-side integration code and tests, not the third-party service installation.
+- Wiring `FIRDAY_PLANNER=llm` as the Pi's production default - it is available via env var but the Pi's `.env` was not changed as part of this milestone; that is an operator decision once Ollama/OmniRoute are actually verified running.
+- A real confirmation channel (Part 10/11) - `REQUIRE_CONFIRMATION` still blocks unconditionally, as it did after Part 7.
+- Token-accurate context limiting - `LLM_MAX_CONTEXT_CHARS` is a character-count cap, not a tokenizer; adequate for the small local model / short prompts this part specifies, not exact.
+- Any API/gateway surface beyond the existing `/request` endpoint (Part 10).
+
+#### Pi deployment status
+
+**Neither Ollama nor OmniRoute has been verified running on the Pi as part of this milestone.** SSH access to the Pi was not available during this implementation session, so this must not be read as "deployed" - it is FIRDAY-side code and tests only, verified locally (Python 3.12, `pytest -v`, 456 passing) and via local import smoke tests of both `FIRDAY_PLANNER=mock` and `FIRDAY_PLANNER=llm` startup paths. A future session (or the operator) must SSH in and check:
+
+```bash
+ssh sherlock@100.104.228.90
+systemctl --user status ollama 2>&1 || command -v ollama
+curl -s http://localhost:11434/api/tags
+pgrep -af omniroute
+curl -s http://localhost:3333/v1/chat/completions
 ```
 
-Use only the OpenAI-compatible:
+#### Manual deployment steps still required on the Pi
 
-```text
-/v1/chat/completions
+**Ollama:**
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull qwen2.5:0.5b        # or: ollama pull tinyllama:1.1b
+systemctl --user enable --now ollama   # or: sudo systemctl enable --now ollama, depending on install mode
+curl -s http://localhost:11434/api/tags   # verify
 ```
 
-#### OmniRoute hard restrictions
+**OmniRoute** (Node process; exact package name/repo to be confirmed against the OmniRoute project the operator intends to use - this records the generic install shape, not a verified package name):
 
-Do **NOT** connect FIRDAY to:
-
-- OmniRoute bundled MCP server
-- A2A features
-- Cloud Agent features
-- any router feature that gives a model direct access to tools outside FIRDAY
-
-Treat OmniRoute as a **dumb model-routing pipe**.
-
-#### Sensitivity / privacy gate
-
-The first planned gate is deterministic/regex-based, not a paid LLM call.
-
-Detect at minimum:
-
-- home-directory/private file paths
-- credential/token patterns
-- raw private file contents
-- other obvious secrets/private data
-
-For sensitive data:
-
-```text
-route to local-only model
-OR
-block cloud routing and require explicit policy-approved confirmation
+```bash
+node --version   # Node 18+ expected; install via nvm/apt if missing
+npm install -g omniroute        # or: git clone <omniroute repo> && npm install && npm run build
+# Configure OmniRoute's own provider priority (Groq -> Gemini -> Cerebras)
+# and API keys in ITS config/.env - not FIRDAY's - per OmniRoute's own docs.
+omniroute --config ~/omniroute/config.yaml &   # or the project's documented start command
+# Persistent process (systemd user service), e.g. ~/.config/systemd/user/omniroute.service:
+#   [Unit]
+#   Description=OmniRoute LLM router
+#   [Service]
+#   ExecStart=/usr/bin/node /path/to/omniroute/dist/index.js
+#   Restart=on-failure
+#   [Install]
+#   WantedBy=default.target
+systemctl --user daemon-reload
+systemctl --user enable --now omniroute
+curl -s http://localhost:3333/v1/chat/completions   # verify (expect a 4xx for a bad/empty body, not connection refused)
 ```
 
-Do not weaken this rule merely to improve convenience.
+**FIRDAY's `.env` additions** once both are verified running:
 
-#### Cloud tool-result boundary
-
-The sensitivity gate must also apply **after tools execute** and before a tool result is included in a cloud LLM request.
-
-#### Provider configuration contract
-
-Before Part 9 is considered complete, document the exact names/semantics of:
-
-- provider API key environment variables
-- provider/model configuration
-- request timeout
-- retry count
-- rate-limit behavior
-- fallback conditions
-- context/token limits
-- provider health/error logging
-- queue behavior under free-tier exhaustion
-
-Do not hardcode provider secrets.
-
-#### Planned model/tool flow
-
-```text
-User
- ↓
-FIRDAY API
- ↓
-FIRDAY Core
- ↓
-Sensitivity/Privacy Gate
- ↓
-Memory retrieval
- ↓
-LLM / Planner
- ↓
-Structured tool/action request
- ↓
-Security Engine
- ↓
-Tool Framework
- ↓
-Named Tool
- ↓
-Tool Result
- ↓
-Output Privacy Filter
- ↓
-LLM
- ↓
-Final Response
+```env
+FIRDAY_PLANNER=llm
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:0.5b
+OMNIROUTE_BASE_URL=http://localhost:3333
+OMNIROUTE_MODEL=auto
+OMNIROUTE_API_KEY=<if OmniRoute requires one>
 ```
+
+Then `docker compose up -d --build` and re-verify `/request` end to end against the real container, per the standard Part 9+ verification checklist.
 
 ---
 
@@ -846,6 +862,12 @@ Friday/
 │   │   ├── echo.py
 │   │   ├── filesystem/       # filesystem tools
 │   │   └── system/           # process/service/docker/network/git tools
+│   ├── memory/                # PART 8: MemoryService, MemoryNote, frontmatter, errors
+│   ├── llm/                   # PART 9: hybrid LLM layer
+│   │   ├── privacy.py         # deterministic sensitivity gate + output redaction
+│   │   ├── providers.py       # OllamaClient (local), OmniRouteClient (cloud)
+│   │   ├── planner.py         # LLMPlanner (Planner protocol) + finalize()
+│   │   └── errors.py          # LLMProviderError, LLMMalformedResponseError
 │   ├── config.py             # Settings/environment loading
 │   └── main.py               # FastAPI app/lifespan/routes
 ├── tests/
@@ -859,6 +881,8 @@ Friday/
 │   ├── test_devices.py
 │   ├── test_system_tools.py
 │   ├── test_security_engine.py
+│   ├── test_memory.py
+│   ├── test_llm.py            # PART 9 tests
 │   └── test_python_version.py
 ├── docker-compose.yml
 ├── Dockerfile
@@ -1064,19 +1088,16 @@ When another coding AI takes over FIRDAY, it should do this before changing code
 
 ## 17. Current Next Milestone
 
-**Next milestone:** Part 8 — Memory and Context.
+**Next milestone:** Part 10 — FIRDAY API / Gateway (once Ollama + OmniRoute are actually verified running on the Pi and `FIRDAY_PLANNER=llm` has been exercised against the real container).
 
-The immediate objective is to create the first real FIRDAY memory layer using the Obsidian vault while preserving:
+Part 9 (Hybrid LLM Layer) is implemented and locally tested (456 passing) but **not yet verified on the real Pi** - Ollama and OmniRoute are not confirmed installed/running there. Before starting Part 10, a future session should:
 
-- existing filesystem security
-- separate vault/workspace roots
-- correlation/audit behavior
-- provider independence
-- privacy boundaries
-- no-secret storage
-- real-Pi verification
+- SSH to the Pi and check whether Ollama/OmniRoute are running (commands in section 7, Part 9 write-up).
+- If not, run the manual deployment steps documented there.
+- Set `FIRDAY_PLANNER=llm` in the Pi's `.env`, redeploy, and verify `/request` end to end against the real container (sensitive input blocked from cloud, a real tool call reaching `SecurityEngine`, a `REQUIRE_CONFIRMATION` tool still blocked).
+- Update this handoff's Part 9 "Pi deployment status" once verified.
 
-Do not jump to Parts 9–16 until Part 8 has been implemented, tested, deployed, and documented.
+Do not jump to Parts 11–16 until Part 10 has been implemented, tested, deployed, and documented.
 
 ---
 

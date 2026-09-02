@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -10,8 +11,8 @@ from app.config import settings
 from app.core.context import RequestContext
 from app.core.models import FirdayRequest, FirdayResponse
 from app.core.orchestrator import Core
-from app.core.planner import MockPlanner
-from app.core.registry import build_default_registry
+from app.core.planner import MockPlanner, Planner
+from app.core.registry import ToolRegistry, build_default_registry
 from app.core.tools import ToolDescriptor
 from app.devices.errors import DeviceNotFoundError
 from app.devices.models import Device, DeviceRegistration, DeviceStatus, TrustState
@@ -19,9 +20,40 @@ from app.devices.selection import DeviceQuery
 from app.devices.service import DeviceService
 from app.fs.bootstrap import SandboxConfigurationError, ensure_sandbox_ready
 from app.logging_config import configure_logging
+from app.memory.service import MemoryService
 
 configure_logging(settings.log_level)
 logger = logging.getLogger("firday")
+
+
+def _build_planner(registry: ToolRegistry) -> Planner:
+    """PART 9: opt in to the real LLM planner with ``FIRDAY_PLANNER=llm``.
+
+    Defaults to the Part 1 mock planner so existing behavior/tests are
+    unaffected unless an operator explicitly configures OmniRoute.
+    """
+    if os.getenv("FIRDAY_PLANNER", "mock").strip().lower() != "llm":
+        return MockPlanner()
+
+    from app.llm.planner import LLMPlanner
+    from app.llm.providers import OllamaClient, OmniRouteClient
+
+    cloud = OmniRouteClient(
+        settings.omniroute_base_url,
+        settings.omniroute_model,
+        settings.omniroute_api_key,
+        timeout_seconds=settings.llm_request_timeout_seconds,
+        max_retries=settings.llm_max_retries,
+    )
+    local = OllamaClient(settings.ollama_base_url, settings.ollama_model)
+    return LLMPlanner(
+        cloud,
+        registry,
+        local=local,
+        memory=MemoryService(),
+        memory_top_k=settings.llm_memory_top_k,
+        max_context_chars=settings.llm_max_context_chars,
+    )
 
 
 @asynccontextmanager
@@ -49,7 +81,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="FIRDAY", lifespan=lifespan)
 
-core = Core(planner=MockPlanner(), registry=build_default_registry())
+_registry = build_default_registry()
+core = Core(planner=_build_planner(_registry), registry=_registry)
 devices = DeviceService.create()
 
 
@@ -80,7 +113,10 @@ async def handle_request(
     x_request_id: str | None = Header(default=None),
 ) -> FirdayResponse:
     context = RequestContext.create(request_id=x_request_id, source="http")
-    result = await core.handle(payload, context)
+    # Only PART 9's LLM planner (which defines finalize) gets real execution;
+    # the Part 1 mock planner keeps its NOT_EXECUTED contract unchanged.
+    execute = hasattr(core.planner, "finalize")
+    result = await core.handle(payload, context, execute=execute)
     response.headers["X-Request-ID"] = context.request_id
     return result
 
