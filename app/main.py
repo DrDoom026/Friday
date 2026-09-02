@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     explanation of what is wrong and how to fix it.
     """
     try:
-        ensure_sandbox_ready(settings.fs_allowed_roots)
+        ensure_sandbox_ready(settings.fs_allowed_roots + (settings.fs_vault_root,))
     except SandboxConfigurationError as exc:
         logger.critical("startup aborted - %s", exc)
         raise

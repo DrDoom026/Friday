@@ -8,18 +8,31 @@ from app.core.errors import ToolValidationError
 from app.core.models import ExecutionStatus, FirdayRequest, FirdayResponse, Plan, ToolResult
 from app.core.planner import Planner
 from app.core.registry import ToolRegistry, build_default_registry
+from app.memory.service import MemoryService
 
 
 class Core:
     """Receives a request, invokes the planner, returns a response."""
 
-    def __init__(self, planner: Planner, registry: ToolRegistry | None = None) -> None:
+    def __init__(
+        self,
+        planner: Planner,
+        registry: ToolRegistry | None = None,
+        memory: MemoryService | None = None,
+    ) -> None:
         self._planner = planner
         self._registry = build_default_registry() if registry is None else registry
+        # PART 8: available to the orchestrator; not yet handed to the planner
+        # (MockPlanner takes no memory argument - that wiring is PART 9).
+        self._memory = MemoryService() if memory is None else memory
 
     @property
     def registry(self) -> ToolRegistry:
         return self._registry
+
+    @property
+    def memory(self) -> MemoryService:
+        return self._memory
 
     async def handle(self, request: FirdayRequest, context: RequestContext) -> FirdayResponse:
         log = context.logger("firday.core")

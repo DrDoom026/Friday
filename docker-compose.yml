@@ -10,10 +10,16 @@ services:
       # which the sandbox refuses as a protected system path - so the container
       # side of the mount below must be absolute and outside /root.
       FS_ALLOWED_ROOTS: /data/workspace
+      # PART 8: the Obsidian vault - a second allowed root, separate from the
+      # workspace. Syncthing keeps it mirrored to laptop/phone outside FIRDAY.
+      FS_VAULT_ROOT: /data/vault
     volumes:
       # Persist the sandbox on the host, not in the container's writable layer.
       # FS_HOST_ROOT overrides the host side; it defaults to ~/firday/workspace.
       - "${FS_HOST_ROOT:-${HOME}/firday/workspace}:/data/workspace"
+      # PART 8: the memory vault. FS_VAULT_HOST_ROOT overrides the host side;
+      # it defaults to ~/firday/vault, the same directory Syncthing watches.
+      - "${FS_VAULT_HOST_ROOT:-${HOME}/firday/vault}:/data/vault"
       # PART 5: device trust is anchored on Tailscale identity, so the container
       # needs to reach the host's tailscaled. Both mounts are read-only, and
       # both are optional - without them FIRDAY degrades to leaving devices

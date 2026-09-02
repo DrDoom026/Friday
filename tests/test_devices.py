@@ -855,7 +855,11 @@ def test_startup_registers_the_local_device(client, tmp_path, monkeypatch):
     monkeypatch.setattr(
         main,
         "settings",
-        dataclasses.replace(main.settings, fs_allowed_roots=(str(tmp_path / "workspace"),)),
+        dataclasses.replace(
+            main.settings,
+            fs_allowed_roots=(str(tmp_path / "workspace"),),
+            fs_vault_root=str(tmp_path / "vault"),
+        ),
     )
 
     with client:

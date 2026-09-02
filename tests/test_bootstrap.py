@@ -165,14 +165,20 @@ def test_app_lifespan_creates_the_root_and_serves(tmp_path, monkeypatch):
     import app.main as main
 
     root = tmp_path / "workspace"
+    vault = tmp_path / "vault"
     monkeypatch.setattr(
-        main, "settings", dataclasses.replace(main.settings, fs_allowed_roots=(str(root),))
+        main,
+        "settings",
+        dataclasses.replace(
+            main.settings, fs_allowed_roots=(str(root),), fs_vault_root=str(vault)
+        ),
     )
 
     with TestClient(main.app) as client:
         assert client.get("/health").status_code == 200
 
     assert root.is_dir(), "startup must have created the missing sandbox root"
+    assert vault.is_dir(), "startup must have created the missing PART 8 vault root"
 
 
 def test_app_refuses_to_start_on_an_unusable_sandbox(monkeypatch):

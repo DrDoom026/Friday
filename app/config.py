@@ -9,6 +9,11 @@ load_dotenv()
 #: explicit sandbox under the user's home - never the whole home directory.
 DEFAULT_FS_ALLOWED_ROOTS = "~/firday/workspace"
 
+#: Where the PART 8 memory vault lives - a second sandboxed root, separate from
+#: the workspace, so FIRDAY's own memory notes are never mixed in with a user's
+#: files.
+DEFAULT_FS_VAULT_ROOT = "~/firday/vault"
+
 #: Where the Docker Engine listens. Read-only access to this socket is what the
 #: PART 6 ``docker.*`` tools need; without it they report Docker as unreachable.
 DEFAULT_DOCKER_SOCKET = "/var/run/docker.sock"
@@ -47,6 +52,7 @@ class Settings:
     log_level: str
     port: int
     fs_allowed_roots: tuple[str, ...] = field(default_factory=tuple)
+    fs_vault_root: str = DEFAULT_FS_VAULT_ROOT
     fs_max_read_bytes: int = 5 * 1024 * 1024
     fs_max_write_bytes: int = 5 * 1024 * 1024
     fs_max_copy_bytes: int = 50 * 1024 * 1024
@@ -68,6 +74,7 @@ def get_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         port=_int_env("PORT", 8000),
         fs_allowed_roots=_roots_env("FS_ALLOWED_ROOTS", DEFAULT_FS_ALLOWED_ROOTS),
+        fs_vault_root=os.path.expanduser(os.getenv("FS_VAULT_ROOT") or DEFAULT_FS_VAULT_ROOT),
         fs_max_read_bytes=_int_env("FS_MAX_READ_BYTES", 5 * 1024 * 1024),
         fs_max_write_bytes=_int_env("FS_MAX_WRITE_BYTES", 5 * 1024 * 1024),
         fs_max_copy_bytes=_int_env("FS_MAX_COPY_BYTES", 50 * 1024 * 1024),
