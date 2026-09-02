@@ -26,6 +26,12 @@ Minimal FastAPI backend.
   real; the eight that change system state are registered and refuse until
   Part 7.
 
+- **PART 7** — Security / Permission Engine: the decision layer that authorizes
+  every tool execution. Maps tool permission metadata and device trust (from
+  Part 5) to ALLOW, DENY, or REQUIRE_CONFIRMATION decisions. Replaces the hardcoded
+  stubs in `fs.delete`/`move`/`rename` and system control tools with dynamic policy
+  evaluations and structured security audit logging (`firday.security.audit`).
+
   PART 3 (a generic shell tool) is intentionally skipped by design.
 
 ## Requirements

@@ -27,6 +27,7 @@ from app.core.errors import ToolExecutionError
 from app.core.registry import register_tool
 from app.system.command import reject_option_like, run_command_async
 from app.system.errors import CommandNotAvailableError, InvalidTargetError, SystemToolError
+from app.core.tools import SideEffect, ToolPermissions
 from app.tools.system.base import (
     DeniedSystemTool,
     SystemTool,
@@ -38,6 +39,17 @@ DOMAIN = "git"
 
 GIT_READ = read_permissions("git.read", filesystem=True)
 GIT_WRITE = control_permissions("git.write", network=True, filesystem=True)
+
+#: git.clone actually runs (like fs.mkdir/fs.copy) rather than being a denied
+#: stub, so unlike GIT_WRITE it does not set requires_confirmation - it is a
+#: plain write operation, allowed by default, that enforces its own
+#: no-overwrite rule instead of gating on the Security Engine.
+GIT_CLONE = ToolPermissions(
+    side_effect=SideEffect.WRITE,
+    scopes=("system.write", "git.write"),
+    network_access=True,
+    filesystem_access=True,
+)
 
 GIT_BINARY = "git"
 
@@ -375,7 +387,7 @@ class GitCloneTool(GitTool):
         "Refuses any destination that already exists."
     )
     version = "1.0.0"
-    permissions = GIT_WRITE
+    permissions = GIT_CLONE
     input_model = GitCloneInput
     output_model = GitCloneOutput
 

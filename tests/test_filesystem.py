@@ -27,7 +27,6 @@ from app.fs.policy import FilesystemLimits, FilesystemPolicy
 from app.tools.filesystem import DISABLED_TOOL_NAMES, ENABLED_TOOL_NAMES
 from app.tools.filesystem.content import ReadFileTool, WriteFileTool
 from app.tools.filesystem.destructive import (
-    NOT_AUTHORIZED_REASON,
     DeleteInput,
     DeleteTool,
     MoveTool,
@@ -580,10 +579,10 @@ def test_destructive_tools_refuse_with_a_not_yet_authorized_result(
     result = call(tool_cls, policy, resolved)
 
     assert result.status is ExecutionStatus.ERROR
-    assert "not yet authorized" in result.error
-    assert "PART 7" in result.output["blocked_until"]
+    assert "requires confirmation but no confirmation channel exists" in result.error
+    assert "PART 10/11" in result.output["blocked_until"]
     assert result.output["authorized"] is False
-    assert result.output["reason"] == NOT_AUTHORIZED_REASON
+    assert "requires confirmation" in result.output["reason"]
     assert result.duration_ms is not None
 
 
@@ -609,7 +608,7 @@ def test_destructive_tools_deny_before_validating_input(policy, tool_cls, _argum
     """The denial short-circuits everything - even garbage arguments get it."""
     result = call(tool_cls, policy, {"nonsense": True})
     assert result.status is ExecutionStatus.ERROR
-    assert "not yet authorized" in result.error
+    assert "requires confirmation but no confirmation channel exists" in result.error
 
 
 @pytest.mark.parametrize(("tool_cls", "_arguments"), DESTRUCTIVE_CASES)

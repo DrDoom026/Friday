@@ -3,8 +3,9 @@
 Three things are checked for every tool:
 
 - every read-only tool's happy path, executed for real against this host;
-- every state-changing tool's refusal, with the "not yet authorized" shape
-  Part 4 established;
+- every state-changing tool's refusal, now a real Security Engine decision
+  (requires confirmation, no confirmation channel exists yet) rather than the
+  hardcoded stub Part 6 established;
 - that a refusal really is inert - the process is still running, the container
   was never contacted, the working tree never moved.
 
@@ -47,7 +48,6 @@ from app.system.command import (
 from app.system.docker_api import DockerClient, demultiplex
 from app.system.errors import CommandNotAvailableError, InvalidTargetError
 from app.tools.system import DISABLED_TOOL_NAMES, ENABLED_TOOL_NAMES
-from app.tools.system.base import NOT_AUTHORIZED_REASON
 from app.tools.system.docker import (
     ContainerLogsTool,
     InspectContainerTool,
@@ -256,10 +256,10 @@ def test_proc_terminate_refuses_with_a_not_yet_authorized_result(live_child):
     result = call(TerminateProcessTool(), {"pid": live_child.pid, "signal": "TERM"})
 
     assert result.status is ExecutionStatus.ERROR
-    assert "not yet authorized" in result.error
+    assert "requires confirmation but no confirmation channel exists" in result.error
     assert result.output["authorized"] is False
-    assert result.output["reason"] == NOT_AUTHORIZED_REASON
-    assert "PART 7" in result.output["blocked_until"]
+    assert "requires confirmation" in result.output["reason"]
+    assert "PART 10/11" in result.output["blocked_until"]
     assert result.output["domain"] == "process"
     assert result.output["targets"] == [str(live_child.pid)]
     assert result.duration_ms is not None
@@ -279,7 +279,7 @@ def test_proc_terminate_does_not_signal_the_process(live_child):
 def test_proc_terminate_denies_before_validating_input():
     result = call(TerminateProcessTool(), {"nonsense": True})
     assert result.status is ExecutionStatus.ERROR
-    assert "not yet authorized" in result.error
+    assert "requires confirmation but no confirmation channel exists" in result.error
 
 
 def test_proc_terminate_authorization_stub_always_denies():
@@ -347,7 +347,7 @@ SERVICE_CONTROL_TOOLS = [StartServiceTool, StopServiceTool, RestartServiceTool]
 def test_service_control_tools_refuse(tool_cls):
     result = call(tool_cls(), {"unit": "docker"})
     assert result.status is ExecutionStatus.ERROR
-    assert "not yet authorized" in result.error
+    assert "requires confirmation but no confirmation channel exists" in result.error
     assert result.output["authorized"] is False
     assert result.output["domain"] == "service"
     assert result.output["targets"] == ["docker"]
@@ -362,7 +362,7 @@ def test_service_control_tools_never_run_systemctl(tool_cls, monkeypatch):
 
     monkeypatch.setattr("app.tools.system.services.run_command_async", explode)
     result = call(tool_cls(), {"unit": "docker"})
-    assert "not yet authorized" in result.error
+    assert "requires confirmation but no confirmation channel exists" in result.error
 
 
 @needs_systemd
@@ -608,7 +608,7 @@ DOCKER_CONTROL_TOOLS = [StartContainerTool, StopContainerTool, RestartContainerT
 def test_docker_control_tools_refuse(tool_cls, engine):
     result = call(tool_cls(engine.client()), {"container": "firday-api"})
     assert result.status is ExecutionStatus.ERROR
-    assert "not yet authorized" in result.error
+    assert "requires confirmation but no confirmation channel exists" in result.error
     assert result.output["authorized"] is False
     assert result.output["domain"] == "docker"
     assert result.output["targets"] == ["firday-api"]
@@ -1032,11 +1032,11 @@ def test_git_pull_refuses(policy, clone_behind_origin):
     result = call(GitPullTool(policy=policy), {"path": str(clone_behind_origin)})
 
     assert result.status is ExecutionStatus.ERROR
-    assert "not yet authorized" in result.error
+    assert "requires confirmation but no confirmation channel exists" in result.error
     assert result.output["authorized"] is False
     assert result.output["domain"] == "git"
     assert result.output["operation"] == "pull"
-    assert "PART 7" in result.output["blocked_until"]
+    assert "PART 10/11" in result.output["blocked_until"]
 
 
 @needs_git
@@ -1059,7 +1059,7 @@ def test_git_pull_never_runs_git(policy, repo, monkeypatch):
 
     monkeypatch.setattr("app.tools.system.git.run_command_async", explode)
     result = call(GitPullTool(policy=policy), {"path": str(repo)})
-    assert "not yet authorized" in result.error
+    assert "requires confirmation but no confirmation channel exists" in result.error
 
 
 # ===========================================================================
@@ -1170,9 +1170,9 @@ def test_every_disabled_system_tool_refuses_whatever_it_is_given():
     for name in DISABLED_TOOL_NAMES:
         result = run(registry.get(name).execute({}, context_for(name)))
         assert result.status is ExecutionStatus.ERROR, name
-        assert "not yet authorized" in result.error, name
+        assert "requires confirmation but no confirmation channel exists" in result.error, name
         assert result.output["authorized"] is False, name
-        assert result.output["blocked_until"] == "PART 7 - Security/Permission Engine", name
+        assert result.output["blocked_until"] == "PART 10/11 - Confirmation UI/Channel", name
 
 
 def test_the_part_6_deny_reason_matches_the_part_4_milestone():

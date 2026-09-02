@@ -99,6 +99,27 @@ class BaseTool(ABC):
         log = context.logger()
         started = time.perf_counter()
 
+        # PART 7: Authorize every tool execution through the Security Engine
+        from app.security.engine import get_security_engine
+        from app.security.models import SecurityDecision
+
+        engine = get_security_engine()
+        evaluation = engine.authorize(self, arguments, context)
+        if evaluation.decision != SecurityDecision.ALLOW:
+            reason = evaluation.reason
+            if evaluation.decision == SecurityDecision.REQUIRE_CONFIRMATION:
+                reason = (
+                    f"tool {self.name!r} requires confirmation but no confirmation channel exists yet "
+                    f"(blocked until PART 10/11 implements confirmation UI/channel)"
+                )
+            log.warning(
+                "tool execution blocked by security engine (tool=%s, decision=%s): %s",
+                self.name,
+                evaluation.decision.value,
+                reason,
+            )
+            return self._failure(reason, started)
+
         try:
             payload = self.validate_input(arguments)
         except ToolValidationError as exc:

@@ -176,36 +176,60 @@ class DeniedSystemTool(SystemTool):
     target_arguments: ClassVar[tuple[str, ...]] = ()
 
     def is_authorized(self, arguments: Mapping[str, Any], context: ToolExecutionContext) -> bool:
-        """Authorization stub. Always denies until PART 7 replaces it."""
-        return False
+        """Authorization check via the Security Engine (PART 7)."""
+        from app.security.engine import get_security_engine
+
+        engine = get_security_engine()
+        return engine.check_tool_authorized(self, arguments, context)
 
     async def execute(
         self, arguments: Mapping[str, Any], context: ToolExecutionContext
     ) -> ToolResult:
         started = time.perf_counter()
 
-        if self.is_authorized(arguments, context):  # pragma: no cover - always False in Part 6
+        # Get full security evaluation
+        from app.security.engine import get_security_engine
+        from app.security.models import SecurityDecision
+
+        engine = get_security_engine()
+        evaluation = engine.authorize(self, arguments, context)
+
+        if evaluation.decision == SecurityDecision.ALLOW:
             return await super().execute(arguments, context)
 
+        # Tool is denied or requires confirmation (which doesn't exist yet)
         targets = self._raw_targets(arguments)
+
+        if evaluation.decision == SecurityDecision.REQUIRE_CONFIRMATION:
+            reason = (
+                f"tool {self.name!r} requires confirmation but no confirmation channel exists yet "
+                f"(blocked until PART 10/11 implements confirmation UI/channel)"
+            )
+        else:
+            reason = evaluation.reason
+
         self._audit(
             context,
             targets,
             allowed=False,
             outcome="not_authorized",
-            detail=NOT_AUTHORIZED_REASON,
+            detail=reason,
         )
         context.logger().warning(
-            "state-changing tool refused (tool=%s, reason=not_authorized)", self.name
+            "state-changing tool refused (tool=%s, decision=%s)", self.name, evaluation.decision.value
         )
 
         return ToolResult(
             tool_name=self.name,
             status=ExecutionStatus.ERROR,
             output=NotAuthorizedOutput(
-                domain=self.domain, operation=self.operation, targets=targets
+                domain=self.domain,
+                operation=self.operation,
+                targets=targets,
+                reason=reason,
+                blocked_until="PART 10/11 - Confirmation UI/Channel" if evaluation.decision == SecurityDecision.REQUIRE_CONFIRMATION else BLOCKED_UNTIL,
             ).model_dump(mode="json"),
-            error=f"tool {self.name!r} is not yet authorized: {NOT_AUTHORIZED_REASON}",
+            error=reason,
             duration_ms=self._elapsed_ms(started),
         )
 
