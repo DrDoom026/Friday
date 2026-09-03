@@ -751,15 +751,114 @@ executing.
 
 ---
 
+### ✅ Part 13 — Communication Adapters (Gmail reference implementation)
+
+**Abstraction (`app/comm/`):** `CommunicationAdapter` (`app/comm/adapter.py`)
+is a `Protocol` with one identity attribute (`platform`) and two methods:
+`fetch_new(limit) -> list[InboundMessage]` and `send(OutboundMessage) -> None`.
+`InboundMessage`/`OutboundMessage` (`app/comm/models.py`) are the only shapes
+Core-driven code deals in - no Gmail (or future Telegram/SMS) payload ever
+crosses that boundary. A future adapter implements the same Protocol with no
+change to Core.
+
+**Gmail adapter (`app/comm/gmail/`):** `GmailClient` talks to Google's
+official Gmail REST API + OAuth2 token endpoint directly over `httpx` (the
+same dependency Part 9's LLM providers already use - no
+`google-api-python-client`, no browser automation, no scraping). `GmailAdapter`
+normalizes Gmail's JSON into `InboundMessage` (decodes the MIME body, caps it
+at 4000 chars) and builds outbound sends with the stdlib `email.mime` package.
+
+**Gmail tools (`app/tools/communication/gmail.py`)** - the only way anything
+reaches Gmail from FIRDAY, all going through the ordinary
+`BaseTool.execute` → Security Engine → `run` path:
+
+| Tool | Permission | Behavior |
+|------|------------|----------|
+| `comm.gmail.list` | READ | Sender/subject/snippet only - no full body fetch |
+| `comm.gmail.read` | READ | Full normalized body of one message by id |
+| `comm.gmail.send` | WRITE, `requires_confirmation=True` | Blocked by `REQUIRE_CONFIRMATION` until a confirmation channel exists (Part 10/11) - not wired to auto-send |
+
+`comm.gmail.send` needed no custom denial logic - declaring
+`requires_confirmation=True` on `ToolPermissions` is enough for
+`DefaultSecurityPolicy` to return `REQUIRE_CONFIRMATION`, which
+`BaseTool.execute` already blocks generically. The adapter/client are never
+even constructed for a blocked call.
+
+**Core integration:** `POST /comm/gmail/poll` (PART 10's API, auth-protected)
+is the concrete inbound path: `GmailAdapter.fetch_new()` → one
+`FirdayRequest` per unread message → `Core.handle()` (planner → Security
+Engine → tools, identical to `/request`) → `FirdayResponse`. On-demand only,
+no polling loop/scheduler - that is Part 15's. If the planner ever picks
+`comm.gmail.send`, it hits the same `REQUIRE_CONFIRMATION` block.
+
+**OAuth/config:** three env vars - `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`,
+`GMAIL_REFRESH_TOKEN` (`GMAIL_REQUEST_TIMEOUT_SECONDS` optional, default 10s).
+No credentials file - same pattern as `OMNIROUTE_API_KEY`. All unset by
+default; the app, adapter, and tools start cleanly without them and only
+fail (a clean `GmailConfigurationError` → `ToolResult.status=error` or HTTP
+503, never a crash) when a Gmail operation actually runs.
+
+To obtain the three values (one-time, manual, outside FIRDAY):
+1. In Google Cloud Console, create/select a project, enable the Gmail API.
+2. Create an OAuth 2.0 Client ID (type: Desktop app) → gives `GMAIL_CLIENT_ID`
+   / `GMAIL_CLIENT_SECRET`.
+3. Run the OAuth consent flow once (e.g. Google's own quickstart / any
+   installed-app OAuth helper) requesting scopes `gmail.readonly` and
+   `gmail.send`, approve as the target mailbox, and capture the resulting
+   `refresh_token` → `GMAIL_REFRESH_TOKEN`.
+4. Put all three in the Pi's `.env` (never in git - `.env` is git-ignored).
+
+**Privacy:** unchanged Part 9 gate - every tool output (Gmail included)
+still passes through `LLMPlanner._filter_result` → `redact()` before any
+cloud LLM call; nothing Gmail-specific was added or needed to make that true.
+Email bodies are capped (4000 chars) and never written to `MemoryService`/the
+Obsidian vault by this milestone. The OAuth access/refresh token is held only
+inside `GmailClient`, is never logged (verified in tests), and is never
+returned in a tool result or memory note.
+
+**Limitations:** no inbound polling loop (on-demand `/comm/gmail/poll` only,
+by design - Part 15 owns scheduling); `comm.gmail.send` cannot execute at all
+until a confirmation channel exists; only `list`/`read`/`send` are
+implemented (no labels, attachments, drafts, or thread-level operations);
+Telegram/SMS adapters are not built (out of scope for this milestone, see
+section 8).
+
+**Tests:** 466 → 490 passing (24 new): the adapter Protocol/models, Gmail
+client OAuth + REST calls (mocked `httpx` transport, no real credentials),
+message normalization/body-cap/outbound MIME construction, tool registration,
+Security Engine paths (`comm.gmail.send` blocked, untrusted-device DENY for
+send while read stays ALLOW), missing-credential and API-failure handling,
+the `/comm/gmail/poll` Core-integration path, and that Gmail output is
+redacted before it would reach a cloud LLM. Two pre-existing tool-family
+assertions (`test_tools.py`, `test_registry_wiring.py`) were updated to
+include the new `comm.` family - not weakened, just extended.
+
+**Real-Pi verification: not done this session** (implementation + local
+tests only, per this milestone's process - the operator reviews, commits,
+and deploys before Pi verification). Once deployed:
+- confirm the app still starts and `/health` returns 200 over Tailscale
+- confirm `POST /comm/gmail/poll` returns `503` cleanly with no
+  `GMAIL_*` env vars set (adapter starts clean without credentials)
+- once `GMAIL_CLIENT_ID`/`SECRET`/`REFRESH_TOKEN` are configured on the Pi,
+  perform one minimal non-destructive real call (e.g. `comm.gmail.list`)
+  and confirm it reaches the real Gmail API through the full
+  adapter → Core → Security Engine → Tool path
+
+---
+
 ## 8. Future Build Priority
 
 After Part 10, the agreed priority is based on personal utility rather than numeric order:
 
 ### 1. Part 13 — Communication Adapters
 
+**Gmail is implemented (see section 6/7 above).** SMS and Telegram remain
+approved but not yet built - the abstraction (`CommunicationAdapter`) is
+ready for them.
+
 Approved first adapters:
 
-- Gmail (official API)
+- Gmail (official API) - ✅ done
 - SMS via Android Telephony APIs
 - Telegram
 
@@ -1117,22 +1216,29 @@ When another coding AI takes over FIRDAY, it should do this before changing code
 
 ## 17. Current Next Milestone
 
-**Next milestone:** finish Part 10's real-Pi verification, then move to Part 11+ (per section 8's priority order).
+**Next milestone:** finish Part 13's real-Pi verification (Gmail adapter), then move to the next item in section 8's priority order (SMS/Telegram adapters, or Part 14).
 
-Part 10 (FIRDAY API / Gateway) is implemented and locally tested (466 passing:
-456 Part 9 baseline + 10 new). **Not yet verified on the real Pi** - SSH access
-to `sherlock@100.104.228.90` was not available during this implementation
-session (publickey/password auth both rejected), so this must not be read as
-"deployed". A future session (or the operator) must:
+Part 10 (FIRDAY API / Gateway) is complete, deployed, and verified on the
+real Pi (tagged `v0.10-part10`; 466 passing at the time).
 
-- SSH to the Pi, `git pull`, `docker compose up -d --build`.
+Part 13 (Communication Adapters - Gmail reference) is implemented and
+locally tested (490 passing: 466 baseline + 24 new). **Not yet verified on
+the real Pi** - this session only implemented and locally tested per the
+requested process (operator reviews/commits/deploys before Pi verification).
+Before starting the next milestone:
+
+- `git pull`, `docker compose up -d --build` on the Pi.
 - Confirm `/health` returns 200 over Tailscale.
-- From the laptop, hit `POST /files/list` (or another new Part 10 endpoint)
-  against the real container and confirm it responds correctly through the
-  full API → Core → Security Engine → Tool path.
+- Confirm `POST /comm/gmail/poll` returns a clean `503` with no Gmail env
+  vars configured (adapter starts cleanly without credentials).
+- Once `GMAIL_CLIENT_ID`/`GMAIL_CLIENT_SECRET`/`GMAIL_REFRESH_TOKEN` are
+  configured on the Pi (see section 6/7's PART 13 write-up for the one-time
+  OAuth steps), perform one minimal non-destructive real Gmail call (e.g.
+  `comm.gmail.list` via `/request`) and confirm it reaches the real Gmail
+  API through the full adapter → Core → Security Engine → Tool path.
 - Update this section once verified.
 
-Do not jump to Parts 11–16 until Part 10 has been implemented, tested, deployed, and documented.
+Do not jump to Parts 11/12/14/15/16 until Part 13 has been implemented, tested, deployed, and documented.
 
 ---
 

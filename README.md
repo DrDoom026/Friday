@@ -131,6 +131,7 @@ put the host side somewhere other than `~/firday/workspace`.
 | `POST` | `/devices/{id}/heartbeat` | Refreshes `last_seen` and status.        |
 | `POST` | `/request` | Runs input through Core and returns the mock plan.      |
 | `POST` | `/files/{operation}` | Runs one filesystem tool (`list`, `stat`, `search`, `read`, `write`, `mkdir`, `copy`; `delete`/`move`/`rename` still refuse) via `fs.{operation}`. |
+| `POST` | `/comm/gmail/poll` | Pulls unread Gmail, runs each through Core, returns the responses. On-demand, not a poller/scheduler. |
 
 All endpoints except `/health` require `X-API-Key` once `FIRDAY_API_KEYS` is
 set (comma-separated). Unset (the default), the API stays open - see PART 10
@@ -431,6 +432,26 @@ a much wider privilege surface than the Docker socket, for one read-only tool.
 That trade has not been made. Run FIRDAY on the host, or accept the limitation.
 
 
+## Communication adapters (PART 13)
+
+`app/comm/` holds the provider-independent adapter abstraction
+(`CommunicationAdapter`: `fetch_new()` / `send()`, plus `InboundMessage` /
+`OutboundMessage`). Gmail (`app/comm/gmail/`) is the first and only
+implementation - the official Gmail REST API + OAuth2, no browser automation
+or scraping.
+
+Tools: `comm.gmail.list` and `comm.gmail.read` (read-only, allowed by
+default), `comm.gmail.send` (requires confirmation - blocked until a
+confirmation channel exists, same as every other confirmable tool). The
+adapter never calls a tool or an LLM directly; inbound Gmail becomes a normal
+`FirdayRequest` run through `Core.handle`, same as `/request`.
+
+Configure via env vars (see `.env.example`): `GMAIL_CLIENT_ID`,
+`GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`. Unset by default - the app and
+tools start cleanly and fail with a clear 503/error only when a Gmail
+operation actually runs. See `docs/FIRDAY_HANDOFF.md` PART 13 for the
+one-time OAuth consent steps to obtain these values.
+
 ## Configuration
 
 Config is loaded from environment variables (see `.env.example`):
@@ -454,6 +475,11 @@ Config is loaded from environment variables (see `.env.example`):
 | `SYSTEM_MAX_PROCESSES` | `500` | Cap on processes returned by `proc.list` |
 | `SYSTEM_MAX_LOG_LINES` | `500` | Cap on lines returned by `docker.logs` |
 | `SYSTEM_MAX_PING_COUNT` | `10` | Cap on echo requests `net.ping` will send |
+| `FIRDAY_API_KEYS` | unset | Comma-separated `X-API-Key` values; unset means the API stays open |
+| `GMAIL_CLIENT_ID` | unset | OAuth2 client id from Google Cloud Console |
+| `GMAIL_CLIENT_SECRET` | unset | OAuth2 client secret |
+| `GMAIL_REFRESH_TOKEN` | unset | OAuth2 refresh token from the one-time consent flow |
+| `GMAIL_REQUEST_TIMEOUT_SECONDS` | `10` | Deadline for Gmail API/token requests |
 
 Never commit a real `.env` file — it's git-ignored. Copy `.env.example` to
 `.env` and edit locally.

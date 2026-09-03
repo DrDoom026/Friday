@@ -81,7 +81,7 @@ def test_tools_endpoint_lists_the_registered_tool():
     body = response.json()
     names = [t["name"] for t in body]
     assert "echo" in names
-    families = ("docker.", "fs.", "git.", "net.", "proc.", "service.")
+    families = ("comm.", "docker.", "fs.", "git.", "net.", "proc.", "service.")
     assert [n for n in names if not n.startswith(families)] == ["echo"]
 
     echo = next(t for t in body if t["name"] == "echo")

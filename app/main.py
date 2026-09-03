@@ -8,6 +8,9 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
 
 from app.api_auth import require_api_key
+from app.comm.gmail.adapter import GmailAdapter
+from app.comm.gmail.client import GmailClient
+from app.comm.gmail.errors import GmailAPIError, GmailConfigurationError
 from app.config import settings
 from app.core.context import RequestContext
 from app.core.models import FirdayRequest, FirdayResponse, ToolResult
@@ -154,6 +157,52 @@ async def run_file_operation(
     if core.registry.try_get(tool_name) is None:
         raise HTTPException(status_code=404, detail=f"no filesystem operation {operation!r}")
     return await core.execute_tool(tool_name, arguments, context)
+
+
+@app.post(
+    "/comm/gmail/poll",
+    response_model=list[FirdayResponse],
+    dependencies=[Depends(require_api_key)],
+)
+async def poll_gmail(limit: int = Query(default=5, ge=1, le=20)) -> list[FirdayResponse]:
+    """Pull unread Gmail, run each message through Core, return the responses.
+
+    This is the PART 13 inbound path made concrete: Gmail -> GmailAdapter ->
+    a normalized ``FirdayRequest`` -> ``Core.handle`` (planner, Security
+    Engine, tools) -> ``FirdayResponse``. No polling loop/scheduler - this is
+    an on-demand trigger, same as ``POST /request``; automatic scheduling is
+    PART 15's. Nothing here sends a reply: if the planner picks
+    ``comm.gmail.send`` it still hits Security Engine's REQUIRE_CONFIRMATION
+    gate like any other confirmable tool.
+    """
+    client = GmailClient(
+        settings.gmail_client_id,
+        settings.gmail_client_secret,
+        settings.gmail_refresh_token,
+        timeout_seconds=settings.gmail_request_timeout_seconds,
+    )
+    adapter = GmailAdapter(client)
+    try:
+        messages = await adapter.fetch_new(limit=limit)
+    except GmailConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except GmailAPIError as exc:
+        raise HTTPException(status_code=502, detail="Gmail API request failed") from exc
+
+    execute = hasattr(core.planner, "finalize")
+    responses = []
+    for message in messages:
+        context = RequestContext.create(source="gmail")
+        request = FirdayRequest(
+            input=f"Email from {message.sender}: {message.subject or '(no subject)'}\n\n{message.body}",
+            metadata={
+                "platform": "gmail",
+                "message_id": message.external_id,
+                "thread_id": message.thread_id or "",
+            },
+        )
+        responses.append(await core.handle(request, context, execute=execute))
+    return responses
 
 
 @app.post(

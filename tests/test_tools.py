@@ -131,7 +131,7 @@ def test_build_default_registry_discovers_the_echo_tool():
 
 def test_echo_remains_the_only_tool_outside_a_family():
     """Every tool added since Part 2 belongs to a named family; `echo` stands alone."""
-    families = ("docker.", "fs.", "git.", "net.", "proc.", "service.")
+    families = ("comm.", "docker.", "fs.", "git.", "net.", "proc.", "service.")
     names = build_default_registry().names()
     assert [n for n in names if not n.startswith(families)] == ["echo"]
 

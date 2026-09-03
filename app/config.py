@@ -91,6 +91,13 @@ class Settings:
     # and tool authorization (Security Engine). Empty by default so existing
     # deployments/tests are unaffected until an operator opts in.
     api_keys: tuple[str, ...] = ()
+    # PART 13: Gmail OAuth (official Gmail REST API + OAuth2 refresh token).
+    # None by default - the adapter/tools must start cleanly without these and
+    # only fail, clearly, when a Gmail operation actually runs.
+    gmail_client_id: str | None = None
+    gmail_client_secret: str | None = None
+    gmail_refresh_token: str | None = None
+    gmail_request_timeout_seconds: float = 10.0
 
     @property
     def fs_all_roots(self) -> tuple[str, ...]:
@@ -134,6 +141,10 @@ def get_settings() -> Settings:
         llm_max_context_chars=_int_env("LLM_MAX_CONTEXT_CHARS", 4000),
         llm_memory_top_k=_int_env("LLM_MEMORY_TOP_K", 3),
         api_keys=tuple(k.strip() for k in (os.getenv("FIRDAY_API_KEYS") or "").split(",") if k.strip()),
+        gmail_client_id=os.getenv("GMAIL_CLIENT_ID") or None,
+        gmail_client_secret=os.getenv("GMAIL_CLIENT_SECRET") or None,
+        gmail_refresh_token=os.getenv("GMAIL_REFRESH_TOKEN") or None,
+        gmail_request_timeout_seconds=_float_env("GMAIL_REQUEST_TIMEOUT_SECONDS", 10.0),
     )
 
 
