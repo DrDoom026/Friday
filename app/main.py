@@ -7,7 +7,19 @@ from fastapi import Body, Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
 
+import asyncio
+
 from app.api_auth import require_api_key
+from app.automation.errors import TaskNotFoundError, TaskValidationError
+from app.automation.models import (
+    AutomationTask,
+    AutomationTaskCreate,
+    AutomationTaskUpdate,
+    ExecutionRecord,
+)
+from app.automation.runner import TaskRunner
+from app.automation.service import AutomationService
+from app.automation.store import AutomationStore
 from app.comm.gmail.adapter import GmailAdapter
 from app.comm.gmail.client import GmailClient
 from app.comm.gmail.errors import GmailAPIError, GmailConfigurationError
@@ -80,7 +92,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # answerable from boot and the Tailscale trust anchor is exercised at
     # startup rather than on first use.
     devices.register_local_device(core.registry)
-    yield
+
+    # PART 15: background poll loop for scheduled/recurring/cron tasks.
+    # Deliberately the smallest possible worker - one asyncio task woken on
+    # a fixed interval, not a framework. Manual runs (POST .../run) do not
+    # depend on this loop at all.
+    poll_task = asyncio.create_task(_automation_poll_loop())
+    try:
+        yield
+    finally:
+        poll_task.cancel()
+        try:
+            await poll_task
+        except asyncio.CancelledError:
+            pass
+
+
+async def _automation_poll_loop() -> None:
+    while True:
+        try:
+            await automation_runner.run_due_tasks()
+        except Exception:  # noqa: BLE001 - a bad tick must never kill the loop
+            logger.exception("automation poll tick failed")
+        await asyncio.sleep(settings.automation_poll_interval_seconds)
 
 
 app = FastAPI(title="FIRDAY", lifespan=lifespan)
@@ -88,6 +122,8 @@ app = FastAPI(title="FIRDAY", lifespan=lifespan)
 _registry = build_default_registry()
 core = Core(planner=_build_planner(_registry), registry=_registry)
 devices = DeviceService.create()
+automation_service = AutomationService(AutomationStore(settings.automation_store_path))
+automation_runner = TaskRunner(core, automation_service, devices=devices.registry)
 
 
 @app.exception_handler(HTTPException)
@@ -157,6 +193,82 @@ async def run_file_operation(
     if core.registry.try_get(tool_name) is None:
         raise HTTPException(status_code=404, detail=f"no filesystem operation {operation!r}")
     return await core.execute_tool(tool_name, arguments, context)
+
+
+@app.post(
+    "/automation/tasks",
+    response_model=AutomationTask,
+    status_code=201,
+    dependencies=[Depends(require_api_key)],
+)
+async def create_automation_task(payload: AutomationTaskCreate) -> AutomationTask:
+    """Create a task. Validation (including secret rejection) lives in the service."""
+    try:
+        return automation_service.create(payload)
+    except TaskValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get(
+    "/automation/tasks",
+    response_model=list[AutomationTask],
+    dependencies=[Depends(require_api_key)],
+)
+async def list_automation_tasks() -> list[AutomationTask]:
+    return automation_service.list()
+
+
+@app.get(
+    "/automation/tasks/{task_id}",
+    response_model=AutomationTask,
+    dependencies=[Depends(require_api_key)],
+)
+async def get_automation_task(task_id: str) -> AutomationTask:
+    try:
+        return automation_service.get(task_id)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.put(
+    "/automation/tasks/{task_id}",
+    response_model=AutomationTask,
+    dependencies=[Depends(require_api_key)],
+)
+async def update_automation_task(task_id: str, payload: AutomationTaskUpdate) -> AutomationTask:
+    try:
+        return automation_service.update(task_id, payload)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except TaskValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete(
+    "/automation/tasks/{task_id}",
+    status_code=204,
+    dependencies=[Depends(require_api_key)],
+)
+async def delete_automation_task(task_id: str) -> Response:
+    try:
+        automation_service.delete(task_id)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(status_code=204)
+
+
+@app.post(
+    "/automation/tasks/{task_id}/run",
+    response_model=ExecutionRecord,
+    dependencies=[Depends(require_api_key)],
+)
+async def run_automation_task(task_id: str) -> ExecutionRecord:
+    """Manual execution. Goes through the exact same Security Engine path as
+    a scheduled firing - this is not a confirmation bypass or a shortcut."""
+    try:
+        return await automation_runner.run_now(task_id)
+    except TaskNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post(

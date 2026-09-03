@@ -98,6 +98,10 @@ class Settings:
     gmail_client_secret: str | None = None
     gmail_refresh_token: str | None = None
     gmail_request_timeout_seconds: float = 10.0
+    # PART 15: automation engine. JSON task registry, separate from the
+    # Part 8 vault (structured machine config, not conversational memory).
+    automation_store_path: str = "~/firday/automation/tasks.json"
+    automation_poll_interval_seconds: float = 30.0
 
     @property
     def fs_all_roots(self) -> tuple[str, ...]:
@@ -145,6 +149,10 @@ def get_settings() -> Settings:
         gmail_client_secret=os.getenv("GMAIL_CLIENT_SECRET") or None,
         gmail_refresh_token=os.getenv("GMAIL_REFRESH_TOKEN") or None,
         gmail_request_timeout_seconds=_float_env("GMAIL_REQUEST_TIMEOUT_SECONDS", 10.0),
+        automation_store_path=os.path.expanduser(
+            os.getenv("AUTOMATION_STORE_PATH") or "~/firday/automation/tasks.json"
+        ),
+        automation_poll_interval_seconds=_float_env("AUTOMATION_POLL_INTERVAL_SECONDS", 30.0),
     )
 
 
