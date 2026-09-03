@@ -1,0 +1,5 @@
+/home/sherlock/Projects/Friday/README.md
+/home/sherlock/Projects/Friday/docker-compose.yml
+/home/sherlock/Projects/Friday/docs/FIRDAY_HANDOFF.md
+/home/sherlock/Projects/Friday/requirements-dev.txt
+/home/sherlock/Projects/Friday/requirements.txt

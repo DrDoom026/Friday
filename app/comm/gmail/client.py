@@ -23,6 +23,15 @@ API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
 #: Refresh this many seconds before actual expiry, to absorb request latency.
 _EXPIRY_SKEW_SECONDS = 30.0
 
+#: Binding to an IPv4 local address forces httpcore/anyio to resolve and
+#: connect over IPv4 only, instead of AF_UNSPEC. Works around Docker
+#: containers (e.g. Raspberry Pi deployments) where dual-stack DNS
+#: resolution via getaddrinfo(AF_UNSPEC) fails even though IPv4 alone
+#: resolves and connects fine. Does not affect TLS SNI/hostname or cert
+#: verification, which httpx derives from the URL, not the local address.
+def _ipv4_transport() -> httpx.AsyncHTTPTransport:
+    return httpx.AsyncHTTPTransport(local_address="0.0.0.0")
+
 
 class GmailClient:
     """Thin wrapper over the official Gmail REST API."""
@@ -40,7 +49,7 @@ class GmailClient:
         self._client_secret = client_secret
         self._refresh_token = refresh_token
         self._timeout = timeout_seconds
-        self._transport = transport
+        self._transport = transport if transport is not None else _ipv4_transport()
         self._access_token: str | None = None
         self._access_token_expiry: float = 0.0
 

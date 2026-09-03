@@ -63,6 +63,23 @@ def test_client_reports_unconfigured_without_all_three_values():
     assert GmailClient("id", "secret", "refresh").configured
 
 
+def test_client_defaults_to_an_ipv4_only_transport():
+    # Regression: containers with a broken AF_UNSPEC/dual-stack resolver
+    # (e.g. Docker on the Pi) fail hostname lookups even though IPv4
+    # alone resolves and connects fine. Binding the local address forces
+    # httpcore/anyio to resolve and connect over IPv4 only.
+    client = GmailClient("id", "secret", "refresh")
+    assert isinstance(client._transport, httpx.AsyncHTTPTransport)
+    pool = client._transport._pool
+    assert pool._local_address == "0.0.0.0"
+
+
+def test_explicit_transport_override_is_not_replaced():
+    transport = httpx.MockTransport(lambda request: httpx.Response(200))
+    client = GmailClient("id", "secret", "refresh", transport=transport)
+    assert client._transport is transport
+
+
 def test_unconfigured_client_raises_configuration_error_before_any_request():
     client = GmailClient(None, None, None)
     with pytest.raises(GmailConfigurationError):
