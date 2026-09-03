@@ -130,6 +130,11 @@ put the host side somewhere other than `~/firday/workspace`.
 | `GET`  | `/devices/{id}` | One device, or 404.                                |
 | `POST` | `/devices/{id}/heartbeat` | Refreshes `last_seen` and status.        |
 | `POST` | `/request` | Runs input through Core and returns the mock plan.      |
+| `POST` | `/files/{operation}` | Runs one filesystem tool (`list`, `stat`, `search`, `read`, `write`, `mkdir`, `copy`; `delete`/`move`/`rename` still refuse) via `fs.{operation}`. |
+
+All endpoints except `/health` require `X-API-Key` once `FIRDAY_API_KEYS` is
+set (comma-separated). Unset (the default), the API stays open - see PART 10
+in `docs/FIRDAY_HANDOFF.md` for the auth/device-trust/tool-authz boundary.
 
 `POST /request` generates a correlation ID per request, threads it through the
 lifecycle logs, and returns it in the body and the `X-Request-ID` header. Send

@@ -690,35 +690,64 @@ Then `docker compose up -d --build` and re-verify `/request` end to end against 
 
 ---
 
-### 🔲 Part 10 — FIRDAY API / Gateway
+### ✅ Part 10 — FIRDAY API / Gateway
 
-Expose a clean API for:
+Most of the gateway surface (`/health`, `/request`, `/tools`, `/devices*`) already
+existed from earlier parts and needed no redesign - Part 10's real work was
+adding the file-operations endpoint and the API authentication boundary.
 
-- health
-- chat/request interaction
-- tool activity
-- device status
-- file operations
-- future confirmation/pending actions
+**New:**
 
-Rules:
+- `POST /files/{operation}` - runs one filesystem tool (`list`, `stat`,
+  `search`, `read`, `write`, `mkdir`, `copy`, plus the disabled `delete`,
+  `move`, `rename` stubs) by name. The route only ever constructs
+  `fs.{operation}` as the tool name, so it can never reach a non-filesystem
+  tool. It resolves the tool via `Core.execute_tool()` (new: a thin wrapper
+  around `ToolRegistry.try_get` + `Tool.execute`, factored out of
+  `Core._resolve_steps` so both the planner path and this direct path share
+  one execution routine) - so it goes through the exact same Security Engine
+  gate as a planned `/request` step. An unknown operation is a 404 before
+  Core is ever called; a known-but-denied operation (e.g. `fs.delete`) comes
+  back as a normal `ToolResult` with `status: "error"`, not a special case in
+  the route.
+- API-key authentication (`app/api_auth.py`, `require_api_key` dependency) on
+  every functional endpoint except `/health`. Reads `X-API-Key` against
+  `FIRDAY_API_KEYS` (comma-separated env var / `Settings.api_keys`). Empty by
+  default - the API stays open until an operator configures keys, matching
+  the Part 9 `FIRDAY_PLANNER=llm` opt-in convention, so existing deployments
+  and the full test suite are unaffected until it's turned on.
 
-- routes contain no business logic
-- authorization is centralized/abstracted
-- API authentication and tool authorization must remain conceptually separate
-- Tailscale remains the current network/device trust anchor
+**Not added (architecture doesn't need it yet):**
 
-Part 10 must define clearly:
+- **Tool activity/status** - `GET /tools` (already existed) is the tool
+  status surface: name, permissions, schemas. There is no persisted
+  execution-history store to expose beyond the Security Engine's structured
+  log lines (`app/security/audit.py`); building one was out of scope for
+  Part 10 and would be speculative infra ahead of a real need.
+- **Task status** - execution is synchronous; `POST /request` and
+  `POST /files/{operation}` already return each step's `ToolResult.status`
+  inline. There is no async job queue, so no task-status endpoint was
+  invented.
+
+**The four-way boundary, concretely:**
 
 ```text
-network authentication
-    ≠
-device trust
-    ≠
-API authorization
-    ≠
-tool authorization
+network authentication  -> Tailscale (outside this process; unchanged)
+device trust             -> app.devices (Device.trust, derived from Tailscale identity)
+API authorization        -> app.api_auth.require_api_key (this Part; X-API-Key header)
+tool authorization       -> app.security.engine (Security Engine; unchanged, still mandatory)
 ```
+
+A missing/invalid API key is rejected by FastAPI's dependency layer before
+Core, the planner, or any tool ever runs. DENY and REQUIRE_CONFIRMATION are
+unaffected - they still happen inside `Tool.execute`, after API auth has
+already passed.
+
+**Limitations:** API keys are a flat shared-secret list (no per-key scoping
+or per-device identity) - sufficient for a single-operator Pi gateway behind
+Tailscale, not a multi-tenant design. No confirmation channel exists yet
+(unchanged from Part 7/9) - `REQUIRE_CONFIRMATION` still blocks rather than
+executing.
 
 ---
 
@@ -1088,14 +1117,20 @@ When another coding AI takes over FIRDAY, it should do this before changing code
 
 ## 17. Current Next Milestone
 
-**Next milestone:** Part 10 — FIRDAY API / Gateway (once Ollama + OmniRoute are actually verified running on the Pi and `FIRDAY_PLANNER=llm` has been exercised against the real container).
+**Next milestone:** finish Part 10's real-Pi verification, then move to Part 11+ (per section 8's priority order).
 
-Part 9 (Hybrid LLM Layer) is implemented and locally tested (456 passing) but **not yet verified on the real Pi** - Ollama and OmniRoute are not confirmed installed/running there. Before starting Part 10, a future session should:
+Part 10 (FIRDAY API / Gateway) is implemented and locally tested (466 passing:
+456 Part 9 baseline + 10 new). **Not yet verified on the real Pi** - SSH access
+to `sherlock@100.104.228.90` was not available during this implementation
+session (publickey/password auth both rejected), so this must not be read as
+"deployed". A future session (or the operator) must:
 
-- SSH to the Pi and check whether Ollama/OmniRoute are running (commands in section 7, Part 9 write-up).
-- If not, run the manual deployment steps documented there.
-- Set `FIRDAY_PLANNER=llm` in the Pi's `.env`, redeploy, and verify `/request` end to end against the real container (sensitive input blocked from cloud, a real tool call reaching `SecurityEngine`, a `REQUIRE_CONFIRMATION` tool still blocked).
-- Update this handoff's Part 9 "Pi deployment status" once verified.
+- SSH to the Pi, `git pull`, `docker compose up -d --build`.
+- Confirm `/health` returns 200 over Tailscale.
+- From the laptop, hit `POST /files/list` (or another new Part 10 endpoint)
+  against the real container and confirm it responds correctly through the
+  full API → Core → Security Engine → Tool path.
+- Update this section once verified.
 
 Do not jump to Parts 11–16 until Part 10 has been implemented, tested, deployed, and documented.
 

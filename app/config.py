@@ -87,6 +87,10 @@ class Settings:
     llm_max_retries: int = 2
     llm_max_context_chars: int = 4000
     llm_memory_top_k: int = 3
+    # PART 10: API-layer authentication, separate from device trust (Tailscale)
+    # and tool authorization (Security Engine). Empty by default so existing
+    # deployments/tests are unaffected until an operator opts in.
+    api_keys: tuple[str, ...] = ()
 
     @property
     def fs_all_roots(self) -> tuple[str, ...]:
@@ -129,6 +133,7 @@ def get_settings() -> Settings:
         llm_max_retries=_int_env("LLM_MAX_RETRIES", 2),
         llm_max_context_chars=_int_env("LLM_MAX_CONTEXT_CHARS", 4000),
         llm_memory_top_k=_int_env("LLM_MEMORY_TOP_K", 3),
+        api_keys=tuple(k.strip() for k in (os.getenv("FIRDAY_API_KEYS") or "").split(",") if k.strip()),
     )
 
 

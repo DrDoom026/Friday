@@ -3,13 +3,14 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
-from fastapi import FastAPI, Header, Query, Request, Response
+from fastapi import Body, Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
 
+from app.api_auth import require_api_key
 from app.config import settings
 from app.core.context import RequestContext
-from app.core.models import FirdayRequest, FirdayResponse
+from app.core.models import FirdayRequest, FirdayResponse, ToolResult
 from app.core.orchestrator import Core
 from app.core.planner import MockPlanner, Planner
 from app.core.registry import ToolRegistry, build_default_registry
@@ -106,7 +107,7 @@ async def health() -> dict:
     return {"status": "ok", "env": settings.app_env}
 
 
-@app.post("/request", response_model=FirdayResponse)
+@app.post("/request", response_model=FirdayResponse, dependencies=[Depends(require_api_key)])
 async def handle_request(
     payload: FirdayRequest,
     response: Response,
@@ -121,12 +122,43 @@ async def handle_request(
     return result
 
 
-@app.get("/tools", response_model=list[ToolDescriptor])
+@app.get(
+    "/tools", response_model=list[ToolDescriptor], dependencies=[Depends(require_api_key)]
+)
 async def list_tools() -> list[ToolDescriptor]:
     return core.registry.describe()
 
 
-@app.post("/devices", response_model=Device, status_code=201)
+@app.post(
+    "/files/{operation}",
+    response_model=ToolResult,
+    dependencies=[Depends(require_api_key)],
+)
+async def run_file_operation(
+    operation: str,
+    arguments: dict = Body(default_factory=dict),
+    x_request_id: str | None = Header(default=None),
+) -> ToolResult:
+    """Run one filesystem operation (list/stat/search/read/write/mkdir/copy).
+
+    Delegates straight to Core, which resolves ``fs.{operation}`` against the
+    tool registry and runs it through the same Security Engine gate as any
+    planned step - the disabled destructive ops (delete/move/rename) still
+    come back as a clean "not authorized" ``ToolResult`` rather than a route
+    doing anything special. Restricting the tool name to the ``fs.`` namespace
+    here means this endpoint can only ever reach filesystem tools, never any
+    other tool family.
+    """
+    context = RequestContext.create(request_id=x_request_id, source="http")
+    tool_name = f"fs.{operation}"
+    if core.registry.try_get(tool_name) is None:
+        raise HTTPException(status_code=404, detail=f"no filesystem operation {operation!r}")
+    return await core.execute_tool(tool_name, arguments, context)
+
+
+@app.post(
+    "/devices", response_model=Device, status_code=201, dependencies=[Depends(require_api_key)]
+)
 async def register_device(
     payload: DeviceRegistration,
     request: Request,
@@ -148,7 +180,7 @@ async def register_device(
     return device
 
 
-@app.get("/devices", response_model=list[Device])
+@app.get("/devices", response_model=list[Device], dependencies=[Depends(require_api_key)])
 async def list_devices(
     capability: list[str] | None = Query(default=None),
     trust: TrustState | None = Query(default=None),
@@ -163,7 +195,9 @@ async def list_devices(
     return list(devices.registry.select(query).devices)
 
 
-@app.get("/devices/{device_id}", response_model=Device)
+@app.get(
+    "/devices/{device_id}", response_model=Device, dependencies=[Depends(require_api_key)]
+)
 async def get_device(device_id: str) -> Device:
     try:
         return devices.registry.get(device_id)
@@ -171,7 +205,11 @@ async def get_device(device_id: str) -> Device:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@app.post("/devices/{device_id}/heartbeat", response_model=Device)
+@app.post(
+    "/devices/{device_id}/heartbeat",
+    response_model=Device,
+    dependencies=[Depends(require_api_key)],
+)
 async def device_heartbeat(device_id: str) -> Device:
     """Record that a device is alive: refreshes ``last_seen`` and status."""
     try:

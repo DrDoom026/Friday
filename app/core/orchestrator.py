@@ -83,6 +83,25 @@ class Core:
         log.info("response returned (elapsed_ms=%.2f)", context.elapsed_ms())
         return response
 
+    async def execute_tool(
+        self, tool_name: str, arguments: dict, context: RequestContext
+    ) -> ToolResult:
+        """Run one named tool directly, outside the planner.
+
+        Used by API routes (PART 10) that expose a single known tool - e.g.
+        filesystem operations - without going through planning. Still routes
+        through :meth:`Tool.execute`, so the Security Engine authorizes it
+        exactly as it would a planned step.
+        """
+        tool = self._registry.try_get(tool_name)
+        if tool is None:
+            return ToolResult(
+                tool_name=tool_name,
+                status=ExecutionStatus.ERROR,
+                error=f"no tool registered under name {tool_name!r}",
+            )
+        return await tool.execute(arguments, ToolExecutionContext.for_tool(context, tool.name))
+
     async def _resolve_steps(
         self, plan: Plan, context: RequestContext, *, execute: bool
     ) -> list[ToolResult]:
@@ -99,6 +118,10 @@ class Core:
         results: list[ToolResult] = []
 
         for step in plan.steps:
+            if execute:
+                results.append(await self.execute_tool(step.tool_name, step.arguments, context))
+                continue
+
             tool = self._registry.try_get(step.tool_name)
             if tool is None:
                 log.warning("planned tool is not registered (tool=%s)", step.tool_name)
@@ -107,14 +130,6 @@ class Core:
                         tool_name=step.tool_name,
                         status=ExecutionStatus.ERROR,
                         error=f"no tool registered under name {step.tool_name!r}",
-                    )
-                )
-                continue
-
-            if execute:
-                results.append(
-                    await tool.execute(
-                        step.arguments, ToolExecutionContext.for_tool(context, tool.name)
                     )
                 )
                 continue
