@@ -76,7 +76,13 @@ def test_is_sensitive_detects_private_data(text):
 
 @pytest.mark.parametrize(
     "text",
-    ["what's the weather like", "list files in the workspace", "hello there"],
+    [
+        "what's the weather like",
+        "list files in the workspace",
+        "hello there",
+        "Email from Alice <alice@example.com>: Test\n\nHi there, ~cheers!",
+        "Email from Bob <bob@example.com>: Re: hello\n\nSee you ~5pm today",
+    ],
 )
 def test_is_sensitive_allows_benign_text(text):
     assert not privacy.is_sensitive(text)

@@ -12,7 +12,7 @@ _PATTERNS: tuple[re.Pattern, ...] = (
     # Private filesystem paths.
     re.compile(r"/home/[\w.\-]+"),
     re.compile(r"/root(?:/|$)"),
-    re.compile(r"~[/\w.\-]*"),
+    re.compile(r"~[\w.\-]*/[\w.\-/]*"),
     re.compile(r"\.ssh[/\\][\w.\-]*"),
     re.compile(r"\bid_rsa\b|\bid_ed25519\b"),
     re.compile(r"\.env\b"),
