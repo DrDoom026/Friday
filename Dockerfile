@@ -1,3 +1,14 @@
+# PART 11: the dashboard (frontend/, Vite + React + Three.js) is compiled to
+# static files in this build stage only. It never runs as a Node server -
+# the final image is Python-only and just serves the compiled output as
+# static files (see app/main.py).
+FROM node:20-slim AS frontend-build
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm install
+COPY frontend ./
+RUN npm run build
+
 FROM python:3.12-slim
 
 # PART 6 system tools shell out to a small, fixed set of binaries. Each one is
@@ -22,6 +33,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY --from=frontend-build /app/static/dashboard ./app/static/dashboard
 
 EXPOSE 8000
 

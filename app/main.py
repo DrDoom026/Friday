@@ -130,8 +130,10 @@ devices = DeviceService.create()
 automation_service = AutomationService(AutomationStore(settings.automation_store_path))
 automation_runner = TaskRunner(core, automation_service, devices=devices.registry)
 
-# PART 11: the web dashboard is a static, self-contained view layer served
-# straight off disk - no template engine, no build step. `html=True` serves
+# PART 11: the web dashboard is a static, self-contained view layer. It is
+# built from source (frontend/, a Vite + React + Three.js project) into this
+# directory; FastAPI only ever serves the resulting static files off disk -
+# no template engine, no Node server in production. `html=True` serves
 # `index.html` for the directory root.
 _DASHBOARD_DIR = Path(__file__).parent / "static" / "dashboard"
 app.mount("/dashboard", StaticFiles(directory=_DASHBOARD_DIR, html=True), name="dashboard")
