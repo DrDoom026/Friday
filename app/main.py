@@ -3,9 +3,12 @@ import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+from pathlib import Path
+
 from fastapi import Body, Depends, FastAPI, Header, Query, Request, Response
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 import asyncio
 
@@ -31,12 +34,14 @@ from app.core.planner import MockPlanner, Planner
 from app.core.registry import ToolRegistry, build_default_registry
 from app.core.tools import ToolDescriptor
 from app.devices.errors import DeviceNotFoundError
+from app.devices.local import LOCAL_DEVICE_ID
 from app.devices.models import Device, DeviceRegistration, DeviceStatus, TrustState
 from app.devices.selection import DeviceQuery
 from app.devices.service import DeviceService
 from app.fs.bootstrap import SandboxConfigurationError, ensure_sandbox_ready
 from app.logging_config import configure_logging
 from app.memory.service import MemoryService
+from app.system import resources
 
 configure_logging(settings.log_level)
 logger = logging.getLogger("firday")
@@ -124,6 +129,12 @@ core = Core(planner=_build_planner(_registry), registry=_registry)
 devices = DeviceService.create()
 automation_service = AutomationService(AutomationStore(settings.automation_store_path))
 automation_runner = TaskRunner(core, automation_service, devices=devices.registry)
+
+# PART 11: the web dashboard is a static, self-contained view layer served
+# straight off disk - no template engine, no build step. `html=True` serves
+# `index.html` for the directory root.
+_DASHBOARD_DIR = Path(__file__).parent / "static" / "dashboard"
+app.mount("/dashboard", StaticFiles(directory=_DASHBOARD_DIR, html=True), name="dashboard")
 
 
 @app.exception_handler(HTTPException)
@@ -315,6 +326,56 @@ async def poll_gmail(limit: int = Query(default=5, ge=1, le=20)) -> list[FirdayR
         )
         responses.append(await core.handle(request, context, execute=execute))
     return responses
+
+
+@app.post(
+    "/docker/{operation}",
+    response_model=ToolResult,
+    dependencies=[Depends(require_api_key)],
+)
+async def run_docker_operation(
+    operation: str,
+    arguments: dict = Body(default_factory=dict),
+    x_request_id: str | None = Header(default=None),
+) -> ToolResult:
+    """Run one Docker operation (containers/inspect/logs/images/start/stop/restart).
+
+    PART 11: the dashboard's containers panel needs the same "call one named
+    tool by HTTP" shape PART 10 already gave ``/files/{operation}``. Restricting
+    the tool name to the ``docker.`` namespace means this endpoint can only
+    ever reach Docker tools - never any other tool family. Goes through
+    ``Core.execute_tool``, so the Security Engine authorizes it exactly as it
+    would a planned step; ``docker.restart`` is a permanently-denied tool
+    (PART 6), so this endpoint reports that denial, it does not lift it.
+    """
+    context = RequestContext.create(request_id=x_request_id, source="http")
+    tool_name = f"docker.{operation}"
+    if core.registry.try_get(tool_name) is None:
+        raise HTTPException(status_code=404, detail=f"no docker operation {operation!r}")
+    return await core.execute_tool(tool_name, arguments, context)
+
+
+@app.get("/system/status", dependencies=[Depends(require_api_key)])
+async def system_status() -> dict:
+    """PART 11: the dashboard's system panel.
+
+    Everything here is a non-secret gauge or boolean - no provider keys,
+    tokens, or OAuth material ever leaves this endpoint. ``cpu_percent`` is a
+    load-average proxy (see ``app.system.resources``), not a sampled reading.
+    """
+    local = devices.registry.try_get(LOCAL_DEVICE_ID)
+    return {
+        "uptime_seconds": resources.uptime_seconds(),
+        "cpu_percent": resources.cpu_percent(),
+        "memory_percent": resources.memory_percent(),
+        "vault_percent": resources.vault_percent(MemoryService().vault_root),
+        "tailscale_connected": bool(local and local.trust == TrustState.TRUSTED),
+        "planner_mode": "llm" if hasattr(core.planner, "finalize") else "mock",
+        "omniroute_configured": bool(settings.omniroute_api_key),
+        "gmail_configured": bool(
+            settings.gmail_client_id and settings.gmail_client_secret and settings.gmail_refresh_token
+        ),
+    }
 
 
 @app.post(

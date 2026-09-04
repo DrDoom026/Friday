@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>FRIDAY</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@200;300&family=Jost:wght@200;300;400&display=swap"
+  rel="stylesheet"
+/>
+<link rel="stylesheet" href="./dashboard.css" />
+</head>
+<body>
+<canvas id="field"></canvas>
+
+<div class="scrim" id="scrim"></div>
+
+<header class="topbar">
+  <button class="menu-btn" id="menuBtn" aria-label="menu">
+    <span></span><span></span><span></span>
+  </button>
+  <div class="wordmark">
+    <div class="wordmark-title">FRIDAY</div>
+    <div class="wordmark-sub">personal intelligence</div>
+  </div>
+  <div class="status-pill">
+    <span class="status-dot"></span>
+    <span>online</span>
+  </div>
+</header>
+
+<main class="centre">
+  <div class="friday-name" id="fridayName">FRIDAY</div>
+  <div class="state-word" id="stateWord">listening</div>
+</main>
+
+<div class="response-overlay" id="responseOverlay" hidden>
+  <div class="response-text" id="responseText"></div>
+</div>
+
+<footer class="dock">
+  <form class="input-pill" id="inputForm" autocomplete="off">
+    <input id="chatInput" type="text" placeholder="say something to Friday&hellip;" maxlength="2000" />
+  </form>
+  <div class="chips" id="chips">
+    <button class="chip" data-text="what's my system status?">system status</button>
+    <button class="chip" data-text="list running containers">containers</button>
+    <button class="chip" data-text="show pending automations">automations</button>
+    <button class="chip" data-text="check for new email">check email</button>
+  </div>
+</footer>
+
+<aside class="drawer" id="drawer" aria-hidden="true">
+  <div class="drawer-header">
+    <span>FRIDAY</span>
+    <button class="drawer-close" id="drawerClose" aria-label="close">&times;</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+
+<div class="toast" id="toast" hidden></div>
+
+<div class="key-gate" id="keyGate" hidden>
+  <div class="key-gate-box">
+    <div class="key-gate-title">api key</div>
+    <input id="keyGateInput" type="password" placeholder="x-api-key" />
+    <button id="keyGateSubmit">connect</button>
+  </div>
+</div>
+
+<script src="./particles.js"></script>
+<script src="./api.js"></script>
+<script src="./dashboard.js"></script>
+</body>
+</html>
