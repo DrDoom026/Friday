@@ -459,16 +459,16 @@
 
   // ---------- api key gate ----------
 
-  function ensureApiKey() {
-    if (Api.getApiKey()) return;
-    els.keyGate.hidden = false;
-  }
+  // Shown only when the backend actually rejects a request with 401 - i.e.
+  // FIRDAY_API_KEYS is configured. Never shown on load, never assumed: a
+  // deployment with no keys configured (the default) must load normally.
+  Api.onUnauthorized(() => { els.keyGate.hidden = false; });
+
   els.keyGateSubmit.addEventListener("click", () => {
     Api.setApiKey(els.keyGateInput.value.trim());
     els.keyGate.hidden = true;
     refreshAllSections();
   });
 
-  ensureApiKey();
   setStateWord("listening");
 })();

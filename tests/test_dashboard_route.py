@@ -24,3 +24,19 @@ def test_dashboard_scripts_are_served():
     for asset in ("particles.js", "api.js", "dashboard.js"):
         response = client.get(f"/dashboard/{asset}")
         assert response.status_code == 200, asset
+
+
+def test_dashboard_data_endpoints_are_open_when_no_api_keys_are_configured():
+    """Regression: the Pi's real deployment ships with FIRDAY_API_KEYS unset.
+
+    Every endpoint the dashboard polls on load must succeed with no
+    ``X-API-Key`` header in that configuration - the frontend's key gate must
+    never be the thing standing between an open backend and a working
+    dashboard.
+    """
+    from app.config import settings
+
+    assert settings.api_keys == ()
+    for path in ("/system/status", "/tools", "/automation/tasks"):
+        response = client.get(path)
+        assert response.status_code == 200, path
