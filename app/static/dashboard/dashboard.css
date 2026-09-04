@@ -1,5 +1,11 @@
 * { box-sizing: border-box; }
 
+/* The HTML `hidden` attribute must always win over a component's own
+ * `display` rule (e.g. `.key-gate { display: flex; }`) - otherwise toggling
+ * `el.hidden` in JS silently does nothing for any element styled with
+ * `display` other than `none`. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   height: 100%;

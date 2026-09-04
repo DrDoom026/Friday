@@ -1,5 +1,7 @@
 """PART 11: dashboard route and static asset delivery."""
 
+import re
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -24,6 +26,20 @@ def test_dashboard_scripts_are_served():
     for asset in ("particles.js", "api.js", "dashboard.js"):
         response = client.get(f"/dashboard/{asset}")
         assert response.status_code == 200, asset
+
+
+def test_hidden_attribute_always_wins_over_component_display_rules():
+    """Regression: ``.key-gate { display: flex; }`` was overriding the HTML
+    ``hidden`` attribute, so ``els.keyGate.hidden = false`` in JS (the correct
+    fix from the previous bug) never actually toggled visibility - the modal
+    showed on every load regardless of backend auth state.
+
+    A generic ``[hidden] { display: none !important; }`` rule must exist so
+    ``el.hidden`` is authoritative for every element in the dashboard, not
+    just ones with no competing ``display`` rule.
+    """
+    css = client.get("/dashboard/dashboard.css").text
+    assert re.search(r"\[hidden\]\s*{[^}]*display:\s*none\s*!important", css)
 
 
 def test_dashboard_data_endpoints_are_open_when_no_api_keys_are_configured():
