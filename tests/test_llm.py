@@ -219,8 +219,10 @@ class _StubCloud:
         self.reply = reply
         self.error = error
         self.last_messages: list[dict[str, str]] | None = None
+        self.call_count = 0
 
     async def complete(self, messages):
+        self.call_count += 1
         self.last_messages = messages
         if self.error:
             raise self.error
@@ -266,6 +268,58 @@ def test_planner_handles_malformed_llm_response(registry):
     plan = run(planner.plan(FirdayRequest(input="do a thing"), RequestContext.create()))
 
     assert plan.steps == []  # never guesses a tool/arguments from garbage
+
+
+def test_system_prompt_requires_a_literal_reply_when_tool_name_is_null():
+    """Regression: the model must be told ``summary`` IS the message to the
+    user for a conversational turn, not a description of one (e.g. "Greet the
+    user with a friendly hello." instead of "Hello! How can I help you?")."""
+    from app.llm.planner import _SYSTEM_PROMPT
+
+    prompt = _SYSTEM_PROMPT.lower()
+    assert "tool_name is null" in prompt
+    assert "exact" in prompt and ("final message" in prompt or "reply" in prompt)
+    assert "written directly to them" in prompt
+    assert "must not be an instruction" in prompt or "not be an instruction" in prompt
+    # the exact failure mode reported from the real Pi must be named as wrong
+    assert "greet the user" in prompt
+
+
+def test_planner_null_tool_name_passes_the_literal_reply_through_as_summary(registry):
+    """The parsing contract is unchanged by the prompt fix: whatever the model
+    puts in ``summary`` for a null tool_name still becomes ``plan.summary``
+    verbatim - this pins the JSON contract, not model behavior."""
+    reply = json.dumps(
+        {"tool_name": None, "arguments": {}, "summary": "Hello! How can I help you today?"}
+    )
+    cloud = _StubCloud(reply=reply)
+    planner = LLMPlanner(cloud, registry)
+
+    plan = run(planner.plan(FirdayRequest(input="hello"), RequestContext.create()))
+
+    assert plan.steps == []
+    assert plan.summary == "Hello! How can I help you today?"
+
+
+def test_core_returns_the_conversational_summary_directly_without_calling_finalize(registry):
+    """Pins Core's documented zero-step behavior (unchanged by this fix):
+    with no tool steps/results, Core never calls ``finalize`` - the planner's
+    ``summary`` (now the literal reply, per the tightened prompt) is the
+    response as-is."""
+    reply = json.dumps(
+        {"tool_name": None, "arguments": {}, "summary": "Hello! How can I help you today?"}
+    )
+    cloud = _StubCloud(reply=reply)
+    planner = LLMPlanner(cloud, registry)
+    core = Core(planner=planner, registry=registry)
+
+    response = run(
+        core.handle(FirdayRequest(input="hello"), RequestContext.create(), execute=True)
+    )
+
+    assert response.output == "Hello! How can I help you today?"
+    assert response.results == []
+    assert cloud.call_count == 1  # plan() only - finalize() never invoked
 
 
 def test_planner_handles_provider_failure_gracefully(registry):

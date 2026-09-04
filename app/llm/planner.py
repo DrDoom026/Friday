@@ -28,9 +28,20 @@ _SYSTEM_PROMPT = (
     "You are FIRDAY's planner. Given a user request and optional memory context, "
     "decide whether a tool should run. Reply with ONLY a JSON object of the form "
     '{"tool_name": <tool name string or null>, "arguments": <object>, "summary": '
-    "<one sentence>}. Use tool_name null for a plain conversational reply. Never "
-    "invent a tool name that was not listed. Do not include any text outside the "
-    "JSON object."
+    "<one sentence>}. Never invent a tool name that was not listed. Do not include "
+    "any text outside the JSON object.\n\n"
+    "If tool_name is null, this is a plain conversational reply and \"summary\" MUST "
+    "be the exact, final message to send the user - written directly to them, in "
+    "natural language, ready to send as-is. It must NOT be an instruction, an action "
+    "description, a plan, or a third-person description (never \"say X\", \"tell the "
+    "user X\", or \"respond that X\").\n"
+    'User: hello -> {"tool_name": null, "arguments": {}, "summary": "Hello! How can '
+    'I help you today?"} (NOT "Greet the user with a friendly hello.")\n'
+    'User: how are you? -> {"tool_name": null, "arguments": {}, "summary": "I\'m '
+    'doing well. What can I help you with?"} (NOT "Tell the user you are doing '
+    "well.\")\n"
+    "If tool_name is not null, \"summary\" remains a concise description of the "
+    "planned tool action, as before."
 )
 
 
