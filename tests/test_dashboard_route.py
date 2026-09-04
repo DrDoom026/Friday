@@ -1,4 +1,10 @@
-"""PART 11: dashboard route and static asset delivery."""
+"""PART 11: dashboard route and static asset delivery.
+
+The dashboard is now built from `frontend/` (Vite + React + Three.js) into
+`app/static/dashboard/`; FastAPI serves whatever that build produced. Asset
+filenames are content-hashed by the bundler, so this file discovers them
+from the built `index.html` rather than hardcoding names.
+"""
 
 import re
 
@@ -9,6 +15,12 @@ from app.main import app
 client = TestClient(app, raise_server_exceptions=False)
 
 
+def _asset_paths():
+    """Extract the /dashboard/assets/... paths referenced by the built index.html."""
+    html = client.get("/dashboard/").text
+    return re.findall(r'(?:src|href)="(/dashboard/assets/[^"]+)"', html)
+
+
 def test_dashboard_root_serves_index_html():
     response = client.get("/dashboard/")
     assert response.status_code == 200
@@ -16,30 +28,16 @@ def test_dashboard_root_serves_index_html():
     assert "FRIDAY" in response.text
 
 
-def test_dashboard_stylesheet_is_served():
-    response = client.get("/dashboard/dashboard.css")
-    assert response.status_code == 200
-    assert "text/css" in response.headers["content-type"]
+def test_dashboard_build_references_at_least_one_script_and_one_stylesheet():
+    assets = _asset_paths()
+    assert any(a.endswith(".js") for a in assets), assets
+    assert any(a.endswith(".css") for a in assets), assets
 
 
-def test_dashboard_scripts_are_served():
-    for asset in ("particles.js", "api.js", "dashboard.js"):
-        response = client.get(f"/dashboard/{asset}")
+def test_dashboard_built_assets_are_served():
+    for asset in _asset_paths():
+        response = client.get(asset)
         assert response.status_code == 200, asset
-
-
-def test_hidden_attribute_always_wins_over_component_display_rules():
-    """Regression: ``.key-gate { display: flex; }`` was overriding the HTML
-    ``hidden`` attribute, so ``els.keyGate.hidden = false`` in JS (the correct
-    fix from the previous bug) never actually toggled visibility - the modal
-    showed on every load regardless of backend auth state.
-
-    A generic ``[hidden] { display: none !important; }`` rule must exist so
-    ``el.hidden`` is authoritative for every element in the dashboard, not
-    just ones with no competing ``display`` rule.
-    """
-    css = client.get("/dashboard/dashboard.css").text
-    assert re.search(r"\[hidden\]\s*{[^}]*display:\s*none\s*!important", css)
 
 
 def test_dashboard_data_endpoints_are_open_when_no_api_keys_are_configured():
