@@ -18,7 +18,17 @@ const SILENCE_DURATION_MS = 1200;
 const MAX_UTTERANCE_MS = 30000;
 const DEVICE_ID_KEY = "friday.voiceDeviceId";
 
+// Loopback traffic reaches the backend through the Docker bridge, so
+// Tailscale peer identity can't be resolved for it and FIRDAY would mark a
+// random browser device UNVERIFIED. The boot-time "local" device is already
+// registered and trusted via the Pi's own Tailscale self identity, so the
+// loopback dashboard reuses it instead of registering a new one.
+export function isLoopbackHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
 function getOrCreateDeviceId(): string {
+  if (isLoopbackHost(location.hostname)) return "local";
   try {
     let id = localStorage.getItem(DEVICE_ID_KEY);
     if (!id) {
@@ -167,10 +177,12 @@ export function useVoiceSession(
 
   const start = useCallback(async () => {
     const deviceId = getOrCreateDeviceId();
-    // Reuses the existing Part 5 device trust flow - never a second auth
-    // system. Trust is derived from Tailscale identity on this call, not
-    // asserted by the browser.
-    await api.post("/devices", { name: "browser", device_id: deviceId });
+    if (deviceId !== "local") {
+      // Reuses the existing Part 5 device trust flow - never a second auth
+      // system. Trust is derived from Tailscale identity on this call, not
+      // asserted by the browser.
+      await api.post("/devices", { name: "browser", device_id: deviceId });
+    }
 
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(`${proto}//${location.host}/ws/voice`);
