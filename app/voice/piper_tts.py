@@ -82,8 +82,13 @@ class PiperTTS(TextToSpeech):
 
         def produce() -> None:
             try:
-                for chunk in voice.synthesize_stream_raw(text):
-                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
+                # PiperVoice.synthesize() (piper-tts >= 1.x) yields AudioChunk
+                # objects, not raw bytes - synthesize_stream_raw() no longer
+                # exists in the installed API.
+                for chunk in voice.synthesize(text):
+                    pcm = chunk.audio_int16_bytes
+                    if pcm:
+                        loop.call_soon_threadsafe(queue.put_nowait, pcm)
             except Exception as exc:  # noqa: BLE001 - surfaced as TTSError below
                 loop.call_soon_threadsafe(queue.put_nowait, exc)
             finally:

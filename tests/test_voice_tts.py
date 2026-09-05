@@ -25,6 +25,17 @@ from app.voice.tts import AudioFormat, TTSError, TextToSpeech
 TAILNET_USER = "voice-tts-tester@github"
 
 
+class FakeAudioChunk:
+    """Stands in for ``piper.voice.AudioChunk`` - the installed piper-tts API
+    yields these from ``PiperVoice.synthesize()``, not raw bytes."""
+
+    def __init__(self, audio_int16_bytes: bytes, *, sample_rate: int = 22050):
+        self.audio_int16_bytes = audio_int16_bytes
+        self.sample_rate = sample_rate
+        self.sample_width = 2
+        self.sample_channels = 1
+
+
 def identity(*, node_id="nTTS123CNTRL", name="laptop.tailnet.ts.net", user=TAILNET_USER, source="whois"):
     from app.devices.models import TailscaleIdentity
 
@@ -146,9 +157,9 @@ def test_piper_synthesize_streams_configured_model_chunks(monkeypatch):
     load_calls = {"count": 0}
 
     class FakeVoice:
-        def synthesize_stream_raw(self, text):
-            yield b"\x01\x02"
-            yield b"\x03\x04"
+        def synthesize(self, text):
+            yield FakeAudioChunk(b"\x01\x02")
+            yield FakeAudioChunk(b"\x03\x04")
 
     def fake_load(self):
         load_calls["count"] += 1
@@ -162,12 +173,41 @@ def test_piper_synthesize_streams_configured_model_chunks(monkeypatch):
     assert chunks == [b"\x01\x02", b"\x03\x04"]
 
 
+def test_piper_synthesize_skips_empty_chunks_but_keeps_non_empty_audio(monkeypatch):
+    class FakeVoice:
+        def synthesize(self, text):
+            yield FakeAudioChunk(b"")  # e.g. a leading silence/boundary chunk
+            yield FakeAudioChunk(b"\x01\x02\x03\x04")
+
+    tts = PiperTTS(model_path="/models/en_US-voice.onnx")
+    monkeypatch.setattr("app.voice.piper_tts.PiperTTS._load_voice", lambda self: FakeVoice())
+
+    chunks = asyncio.run(_collect(tts.synthesize("hello")))
+
+    assert chunks == [b"\x01\x02\x03\x04"]
+    assert all(len(c) > 0 for c in chunks), "empty chunks must never reach the client as audio"
+
+
+def test_real_piper_api_matches_what_piper_tts_expects():
+    """Guards the exact API this integration targets: PiperVoice.synthesize()
+    yields AudioChunk objects exposing audio_int16_bytes/sample_rate/
+    sample_width/sample_channels - synthesize_stream_raw() no longer exists."""
+    import dataclasses
+
+    piper_voice = pytest.importorskip("piper.voice")
+    assert hasattr(piper_voice.PiperVoice, "synthesize")
+    assert not hasattr(piper_voice.PiperVoice, "synthesize_stream_raw")
+    assert "audio_int16_bytes" in dir(piper_voice.AudioChunk)
+    field_names = {f.name for f in dataclasses.fields(piper_voice.AudioChunk)}
+    assert {"sample_rate", "sample_width", "sample_channels"}.issubset(field_names)
+
+
 def test_piper_voice_is_loaded_once_across_utterances(monkeypatch):
     load_calls = {"count": 0}
 
     class FakeVoice:
-        def synthesize_stream_raw(self, text):
-            yield b"\x00\x00"
+        def synthesize(self, text):
+            yield FakeAudioChunk(b"\x00\x00")
 
     def fake_load(self):
         load_calls["count"] += 1
@@ -199,7 +239,7 @@ def test_piper_rejects_input_over_the_configured_character_limit():
 
 def test_piper_inference_failure_is_wrapped_without_leaking_internals(monkeypatch):
     class FakeVoice:
-        def synthesize_stream_raw(self, text):
+        def synthesize(self, text):
             raise RuntimeError("internal onnxruntime panic at /etc/shadow")
             yield  # pragma: no cover - unreachable, makes this a generator
 
