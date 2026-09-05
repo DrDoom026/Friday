@@ -1,0 +1,7 @@
+# This client runs on the laptop, not the Pi - a separate dependency set
+# from the server's requirements.txt on purpose.
+python-dotenv>=1.0
+websockets>=12
+sounddevice>=0.4
+numpy>=1.26
+pvporcupine>=3.0

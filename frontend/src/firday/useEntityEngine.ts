@@ -8,6 +8,7 @@ export interface EngineControls {
   clearTimers: () => void;
   pulse: (amount: number) => void;
   current: () => EntityState;
+  setActivity: (level: number) => void;
 }
 
 export function useEntityEngine() {
@@ -43,9 +44,20 @@ export function useEntityEngine() {
     [engine],
   );
 
+  // PART 12e: overrides the state-driven target with a real, live amplitude
+  // (mic while listening, playback while responding) - the existing smoothing
+  // in EntityController (level chasing target) is what keeps this jitter-free,
+  // so this setter itself stays a plain assignment, no extra DSP here.
+  const setActivity = useCallback(
+    (level: number) => {
+      engine.target = Math.max(0, Math.min(1, level));
+    },
+    [engine],
+  );
+
   const controls = useMemo<EngineControls>(
-    () => ({ engine, setState, schedule, clearTimers, pulse, current: () => engine.state }),
-    [engine, setState, schedule, clearTimers, pulse],
+    () => ({ engine, setState, schedule, clearTimers, pulse, current: () => engine.state, setActivity }),
+    [engine, setState, schedule, clearTimers, pulse, setActivity],
   );
 
   return { state, controls };

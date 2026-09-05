@@ -102,6 +102,23 @@ class Settings:
     # Part 8 vault (structured machine config, not conversational memory).
     automation_store_path: str = "~/firday/automation/tasks.json"
     automation_poll_interval_seconds: float = 30.0
+    # PART 12b: local speech-to-text (faster-whisper). CPU/int8 defaults are
+    # sized for a Raspberry Pi 4, not a workstation GPU box.
+    stt_model: str = "tiny"
+    stt_device: str = "cpu"
+    stt_compute_type: str = "int8"
+    stt_language: str | None = None
+    stt_sample_rate: int = 16000
+    stt_max_audio_bytes: int = 1_000_000
+    stt_timeout_seconds: float = 20.0
+    # PART 12c: local text-to-speech (Piper). No default voice ships with
+    # FIRDAY - TTS_MODEL_PATH must point at an operator-supplied .onnx model;
+    # until then synthesis fails cleanly with a structured TTS_FAILED error.
+    tts_model_path: str = ""
+    tts_config_path: str | None = None
+    tts_sample_rate: int = 22050
+    tts_timeout_seconds: float = 20.0
+    tts_max_input_chars: int = 1000
 
     @property
     def fs_all_roots(self) -> tuple[str, ...]:
@@ -153,6 +170,18 @@ def get_settings() -> Settings:
             os.getenv("AUTOMATION_STORE_PATH") or "~/firday/automation/tasks.json"
         ),
         automation_poll_interval_seconds=_float_env("AUTOMATION_POLL_INTERVAL_SECONDS", 30.0),
+        stt_model=os.getenv("STT_MODEL") or "tiny",
+        stt_device=os.getenv("STT_DEVICE") or "cpu",
+        stt_compute_type=os.getenv("STT_COMPUTE_TYPE") or "int8",
+        stt_language=os.getenv("STT_LANGUAGE") or None,
+        stt_sample_rate=_int_env("STT_SAMPLE_RATE", 16000),
+        stt_max_audio_bytes=_int_env("STT_MAX_AUDIO_BYTES", 1_000_000),
+        stt_timeout_seconds=_float_env("STT_TIMEOUT_SECONDS", 20.0),
+        tts_model_path=os.getenv("TTS_MODEL_PATH") or "",
+        tts_config_path=os.getenv("TTS_CONFIG_PATH") or None,
+        tts_sample_rate=_int_env("TTS_SAMPLE_RATE", 22050),
+        tts_timeout_seconds=_float_env("TTS_TIMEOUT_SECONDS", 20.0),
+        tts_max_input_chars=_int_env("TTS_MAX_INPUT_CHARS", 1000),
     )
 
 

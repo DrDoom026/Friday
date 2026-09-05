@@ -3,3 +3,11 @@ uvicorn[standard]>=0.30
 python-dotenv>=1.0
 PyYAML>=6.0
 httpx>=0.27
+# PART 12b: local speech-to-text. Imported lazily (app/voice/faster_whisper_stt.py)
+# so the app still starts and the test suite still runs without it installed.
+faster-whisper>=1.0
+numpy>=1.26
+# PART 12c: local text-to-speech. Imported lazily (app/voice/piper_tts.py) so
+# the app still starts and the test suite still runs without it installed.
+# Ships aarch64 wheels, so it runs on the Pi as-is.
+piper-tts>=1.2

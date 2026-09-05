@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -5,10 +6,11 @@ from typing import AsyncIterator
 
 from pathlib import Path
 
-from fastapi import Body, Depends, FastAPI, Header, Query, Request, Response
+from fastapi import Body, Depends, FastAPI, Header, Query, Request, Response, WebSocket
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.websockets import WebSocketDisconnect
 
 import asyncio
 
@@ -42,6 +44,11 @@ from app.fs.bootstrap import SandboxConfigurationError, ensure_sandbox_ready
 from app.logging_config import configure_logging
 from app.memory.service import MemoryService
 from app.system import resources
+from app.voice.faster_whisper_stt import FasterWhisperSTT
+from app.voice.manager import VoiceSessionManager
+from app.voice.piper_tts import PiperTTS
+from app.voice.pipeline import append_audio_chunk, finish_audio, start_audio
+from app.voice.protocol import handle_message as handle_voice_message
 
 configure_logging(settings.log_level)
 logger = logging.getLogger("firday")
@@ -127,6 +134,26 @@ app = FastAPI(title="FIRDAY", lifespan=lifespan)
 _registry = build_default_registry()
 core = Core(planner=_build_planner(_registry), registry=_registry)
 devices = DeviceService.create()
+voice_sessions = VoiceSessionManager()
+# PART 12b: constructing this loads no model yet - FasterWhisperSTT only
+# loads faster-whisper's model lazily, on the first utterance transcribed.
+voice_stt = FasterWhisperSTT(
+    model_size=settings.stt_model,
+    device=settings.stt_device,
+    compute_type=settings.stt_compute_type,
+    language=settings.stt_language,
+    timeout_seconds=settings.stt_timeout_seconds,
+)
+# PART 12c: likewise, no Piper model is loaded until the first response is
+# synthesized. An unconfigured TTS_MODEL_PATH fails cleanly per-utterance
+# (structured TTS_FAILED), it does not stop the app from starting.
+voice_tts = PiperTTS(
+    model_path=settings.tts_model_path,
+    config_path=settings.tts_config_path,
+    sample_rate=settings.tts_sample_rate,
+    timeout_seconds=settings.tts_timeout_seconds,
+    max_input_chars=settings.tts_max_input_chars,
+)
 automation_service = AutomationService(AutomationStore(settings.automation_store_path))
 automation_runner = TaskRunner(core, automation_service, devices=devices.registry)
 
@@ -440,3 +467,139 @@ async def device_heartbeat(device_id: str) -> Device:
         return devices.registry.mark_seen(device_id)
     except DeviceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+async def _voice_send_error(websocket: WebSocket, code: str, message: str) -> None:
+    await websocket.send_json({"type": "error", "code": code, "message": message})
+
+
+async def _voice_handshake(websocket: WebSocket):
+    """Accept the connection and perform the ``session.start`` handshake.
+
+    Trust is Part 5's, not re-implemented here: the device must already be a
+    known, ``TRUSTED`` device (see ``app.devices.trust``). Tailscale
+    reachability alone is not enough - an unregistered or untrusted
+    ``device_id`` never gets a session, no matter how it reached this socket.
+    Returns the created session, or ``None`` after rejecting and closing.
+    """
+    await websocket.accept()
+    try:
+        raw = await websocket.receive_text()
+    except WebSocketDisconnect:
+        return None
+
+    try:
+        handshake = json.loads(raw)
+    except ValueError:
+        await _voice_send_error(websocket, "MALFORMED_JSON", "handshake must be valid JSON")
+        await websocket.close(code=4400)
+        return None
+
+    if not isinstance(handshake, dict) or handshake.get("type") != "session.start":
+        await _voice_send_error(websocket, "PROTOCOL_ERROR", "expected a session.start message")
+        await websocket.close(code=4400)
+        return None
+
+    device_id = handshake.get("device_id")
+    if not isinstance(device_id, str) or not device_id:
+        await _voice_send_error(websocket, "INVALID_HANDSHAKE", "device_id is required")
+        await websocket.close(code=4400)
+        return None
+
+    device = devices.registry.try_get(device_id)
+    if device is None or not device.is_trusted():
+        # Deliberately the same rejection for "unknown" and "known but
+        # untrusted" - do not let a caller distinguish the two.
+        await _voice_send_error(websocket, "DEVICE_NOT_TRUSTED", "device is not trusted")
+        await websocket.close(code=4401)
+        return None
+
+    session = voice_sessions.create(device_id)
+    await websocket.send_json(
+        {
+            "type": "session.accepted",
+            "session_id": session.session_id,
+            "device_id": session.device_id,
+            "state": session.state.value,
+        }
+    )
+    return session
+
+
+@app.websocket("/ws/voice")
+async def voice_websocket(websocket: WebSocket) -> None:
+    """PART 12a/12b: voice session transport, plus audio -> STT -> Core.
+
+    ``audio.start``/binary frames/``audio.end`` are handled here; a
+    completed utterance is transcribed (``app.voice.pipeline``) and handed
+    to the same ``Core.handle`` that ``POST /request`` uses - no parallel
+    LLM path, no direct tool execution from this socket. The audio buffer
+    for the current utterance is a local variable: it never outlives this
+    connection and is never written to disk.
+    """
+    session = await _voice_handshake(websocket)
+    if session is None:
+        return
+    audio_buffer = None
+    try:
+        while True:
+            try:
+                frame = await websocket.receive()
+            except WebSocketDisconnect:
+                return
+            if frame["type"] == "websocket.disconnect":
+                return
+
+            if frame.get("bytes") is not None:
+                if audio_buffer is None:
+                    await _voice_send_error(
+                        websocket, "AUDIO_NOT_STARTED", "send audio.start before audio data"
+                    )
+                    continue
+                error = append_audio_chunk(audio_buffer, frame["bytes"])
+                if error is not None:
+                    audio_buffer = None
+                    await websocket.send_json(error)
+                continue
+
+            raw = frame.get("text")
+            if raw is None:
+                continue
+            try:
+                message = json.loads(raw)
+            except ValueError:
+                await _voice_send_error(websocket, "MALFORMED_JSON", "message must be valid JSON")
+                continue
+
+            msg_type = message.get("type") if isinstance(message, dict) else None
+
+            if msg_type == "audio.start":
+                audio_buffer, response = start_audio(
+                    session,
+                    message,
+                    expected_sample_rate=settings.stt_sample_rate,
+                    max_bytes=settings.stt_max_audio_bytes,
+                )
+                await websocket.send_json(response)
+                continue
+
+            if msg_type == "audio.end":
+                buffer, audio_buffer = audio_buffer, None
+                async for event in finish_audio(
+                    session, buffer, stt=voice_stt, core=core, tts=voice_tts
+                ):
+                    if event.kind == "json":
+                        await websocket.send_json(event.payload)
+                    else:
+                        await websocket.send_bytes(event.payload)
+                continue
+
+            response = handle_voice_message(session, message)
+            if response is None:
+                await websocket.send_json(
+                    {"type": "session.ended", "session_id": session.session_id}
+                )
+                return
+            await websocket.send_json(response)
+    finally:
+        voice_sessions.remove(session.session_id)

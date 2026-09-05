@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { EngineControls } from "./useEntityEngine";
 import { EntityState } from "./types";
 import * as api from "./api";
+import { useVoiceSession } from "./useVoiceSession";
 
 export interface Line {
   id: number;
@@ -82,21 +83,23 @@ export function useConversation(ctl: EngineControls) {
     }
   }, [ctl]);
 
-  // ponytail: FIRDAY has no speech-to-text tool, so the mic button is a
-  // visual "listening" affordance only - it never fabricates a transcript
-  // or a reply. Add real STT wiring here if/when a voice adapter exists.
+  // PART 12d: a real /ws/voice session (browser fallback) - explicit
+  // activation only, never a hidden always-listening stream. Every line
+  // shown comes from the server's own voice.response, same as send().
+  const voice = useVoiceSession(ctl, show, settle, () => setMicActive(false));
+
   const toggleMic = useCallback(() => {
     setMicActive((was) => {
       const next = !was;
       if (next) {
         ctl.clearTimers();
-        ctl.setState("listening");
+        void voice.start();
       } else {
-        settle();
+        voice.stop();
       }
       return next;
     });
-  }, [ctl, settle]);
+  }, [ctl, voice]);
 
   const overrideState = useCallback(
     (s: EntityState) => {

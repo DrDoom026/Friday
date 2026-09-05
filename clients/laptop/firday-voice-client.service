@@ -1,0 +1,23 @@
+# PART 12d: user systemd unit for the laptop voice client. Installs with no
+# root privileges and no system-wide changes:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp clients/laptop/firday-voice-client.service ~/.config/systemd/user/
+#   # edit WorkingDirectory/ExecStart below for your checkout + venv path
+#   systemctl --user enable --now firday-voice-client.service
+#
+# Configuration (FIRDAY_VOICE_WS_URL, FIRDAY_DEVICE_ID, PORCUPINE_*, ...) goes
+# in a .env file in WorkingDirectory - see clients/laptop/README.md.
+[Unit]
+Description=FIRDAY laptop voice client
+After=network-online.target sound.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Friday
+ExecStart=%h/Friday/.venv/bin/python -m clients.laptop
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
