@@ -27,6 +27,18 @@ export function isLoopbackHost(hostname: string): boolean {
   return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 
+// A tool-executing turn (Gmail, etc.) leaves the mic-capture audio graph
+// torn down and silent for however long the tool + cloud finalize call
+// take, before the response's own audio exists to play - exactly the
+// "quiet AudioContext" browsers' power-saving auto-suspend targets. A
+// quick tool-free chat reply rarely idles long enough to trigger it, which
+// is why only tool-executing responses go silent. Piper still synthesizes
+// and the bytes still arrive; the browser just never resumes playback for
+// them without this check.
+export function shouldResumeAudioContext(state: AudioContextState): boolean {
+  return state === "suspended";
+}
+
 function getOrCreateDeviceId(): string {
   if (isLoopbackHost(location.hostname)) return "local";
   try {
@@ -86,6 +98,15 @@ export function useVoiceSession(
   const playResponseChunk = useCallback(
     (buf: ArrayBuffer) => {
       const ctx = audioContext();
+      // A tool-executing turn (Gmail, etc.) leaves the mic-capture audio
+      // graph torn down and silent for however long the tool + cloud
+      // finalize call take, before any response audio exists to play. A
+      // quiet AudioContext for that stretch is exactly what browsers'
+      // power-saving auto-suspend targets, so a slow tool turn can leave
+      // the context suspended by the time Piper's bytes actually arrive -
+      // silently: no error, the already-shown text is unaffected. Resuming
+      // on every chunk is a cheap no-op once already running.
+      if (shouldResumeAudioContext(ctx.state)) void ctx.resume();
       const samples = new Int16Array(buf);
       // Real playback amplitude, same rms() used for the mic - not a fake
       // pulse. Only meaningful while RESPONDING; harmless if applied
